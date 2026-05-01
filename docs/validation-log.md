@@ -704,3 +704,84 @@ be extracted from the installed `gemini-cli` package at runtime
   `agent-internal`.
 - **Heuristic tail summary** is the last-resort fallback when both
   direct and subprocess modes fail repeatedly.
+
+## 12.1 Settings-merge verification (run 2026-05-02)
+
+Verification gate 1 (M0/T1) for the design assumption that `claude
+--settings <file>` MERGES hook arrays across settings layers (the
+user's `~/.claude/settings.json` plus our temp file) rather than
+replacing them.
+
+### Setup
+
+The user's `~/.claude/settings.json` already contained `hooks` (probed
+via `python3 -c "import json; d=json.load(open('/home/jiangzhuo/.claude/settings.json')); print('existing hooks?', 'hooks' in d)"`
+which printed `existing hooks? True`). The file was backed up to
+`~/.claude/settings.json.bak.gate1` before any modification.
+
+A no-op user-level `Stop` hook was appended to the existing
+`hooks.Stop` array (preserving the existing peon-ping Stop entry):
+
+```json
+{ "matcher": "*", "hooks": [
+  { "type": "command", "command": "/bin/sh -c 'touch /tmp/sesshin-gate1-user-hook'" }
+]}
+```
+
+A separate test settings file was written to
+`/tmp/sesshin-gate1-test.json`:
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      { "matcher": "*", "hooks": [
+        { "type": "command", "command": "/bin/sh -c 'touch /tmp/sesshin-gate1-our-hook'" }
+      ]}
+    ]
+  }
+}
+```
+
+### Commands
+
+```
+rm -f /tmp/sesshin-gate1-user-hook /tmp/sesshin-gate1-our-hook
+claude -p --settings /tmp/sesshin-gate1-test.json --model claude-haiku-4-5 'reply with one word'
+ls -la /tmp/sesshin-gate1-*-hook
+```
+
+### Outcome
+
+Both sentinel files exist after the call:
+
+```
+-rw-rw-r-- 1 jiangzhuo jiangzhuo 0  5月  2 05:55 /tmp/sesshin-gate1-our-hook
+-rw-rw-r-- 1 jiangzhuo jiangzhuo 0  5月  2 05:55 /tmp/sesshin-gate1-user-hook
+```
+
+Result: **MERGE**. `claude --settings <file>` merges hook arrays
+across settings layers. Both the user's `~/.claude/settings.json`
+hooks and the temp file's hooks fired on the single `Stop` event.
+
+### Implication for CLI design
+
+Sesshin's CLI can use the **simple temp-file path**: write our hooks
+to a session-scoped temp settings JSON and pass it via `--settings`,
+without needing a merge fallback that pre-composes the user's hooks
+into the temp file. The Task 50 merge fallback is therefore
+unnecessary for normal operation on this version of `claude` and can
+be deferred or kept only as defensive handling against future CLI
+behavior changes.
+
+### Cleanup
+
+Original `~/.claude/settings.json` restored from
+`~/.claude/settings.json.bak.gate1` (verified: `Stop` hooks count
+returned to 1, no `sesshin-gate1` marker in file, all top-level keys
+preserved). Temp files (`/tmp/sesshin-gate1-test.json`,
+`/tmp/sesshin-gate1-user-hook`, `/tmp/sesshin-gate1-our-hook`)
+removed. The `claude -p` call consumed one Haiku invocation against
+the user's Max-tier subscription; output was the single token
+`Ready.`.
+
