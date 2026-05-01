@@ -785,3 +785,171 @@ removed. The `claude -p` call consumed one Haiku invocation against
 the user's Max-tier subscription; output was the single token
 `Ready.`.
 
+## 12.2 Session JSONL format (run 2026-05-02)
+
+Verification gate 2 (M0/T2) for the design assumption that
+`~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` exists, is
+append-only, and carries one well-typed JSON object per line. This
+informs `packages/hub/src/agents/claude/session-file-path.ts`
+(cwd→directory encoding), `packages/hub/src/observers/session-file-tail.ts`
+(line parsing), and `packages/hub/src/agents/claude/normalize-jsonl.ts`
+(per-line event mapping).
+
+Inspection was read-only against the user's real
+`~/.claude/projects/` tree (18 project directories, 134 root-level
+`.jsonl` files plus subagent jsonls under nested UUID dirs). Line
+contents were never printed; only key signatures, timestamp ordering,
+and file sizes were extracted.
+
+### cwd → directory encoding
+
+Empirical rule (confirmed on every project directory inspected):
+
+```
+encoded_basename = cwd.replace('/', '-').replace('.', '-')
+```
+
+i.e. each `/` and each `.` in the absolute cwd is replaced by a single
+`-`. Because absolute paths begin with `/`, the encoded basename always
+begins with `-`. Examples (using a generic cwd to avoid leaking the
+user's project structure):
+
+| cwd | encoded directory basename |
+|---|---|
+| `/home/me/proj` | `-home-me-proj` |
+| `/home/me/proj-with-hyphen` | `-home-me-proj-with-hyphen` |
+| `/home/me/proj/.tool/wt/branch` | `-home-me-proj--tool-wt-branch` |
+
+Verified end-cases:
+
+- A cwd segment that itself contains `-` (e.g. `sokuji-react`) maps
+  through with the literal hyphen preserved — the encoded basename
+  ends in `…-sokuji-react`, with no extra escaping. Hyphens inside
+  segments are NOT doubled or quoted.
+- A cwd segment that begins with `.` (e.g. `/home/me/proj/.claude/...`)
+  produces a `--` (double-hyphen) in the encoded form, because the
+  `/` before the segment becomes `-` AND the leading `.` of the
+  segment becomes `-`. This was confirmed against four worktree
+  directories of the form
+  `-home-…-sokuji-react--claude-worktrees-…`, all of which correspond
+  to real cwds under `/home/.../sokuji-react/.claude/worktrees/...`.
+
+The encoding is **lossy / non-injective**. The cwd `/a-b/c` and the
+cwd `/a/b-c` both encode to `-a-b-c`. v1 should treat the encoded
+basename as a write target derived from a known cwd, not as something
+that can be reversed back to a cwd. The `cwd` field on each per-turn
+JSONL line carries the authoritative path.
+
+### Filename format
+
+All 134 root-level `.jsonl` files matched the regex
+`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.jsonl$`,
+i.e. **`<UUIDv4>.jsonl`**. No exceptions. The UUID is the Claude
+session id surfaced by `claude -p --output-format json` as
+`session_id`, and is the same id seen in the `sessionId` field on
+every line inside the file.
+
+Subagent jsonls live one level deeper under
+`<session-id>/subagents/agent-<16-hex>.jsonl`. v1's session-file
+observer should look only at the root-level `<session-id>.jsonl`
+unless we explicitly want subagent traffic — those have a different
+filename shape (`agent-…`, no UUIDv4) and live in a subdirectory.
+
+### Per-line top-level fields
+
+Inspected the active session JSONL on this machine (2053 lines, 9
+distinct `type` values). Every line is a single JSON object with a
+`type` discriminator. Field shape per type:
+
+| `type` | Always-present keys | Optional/variant keys |
+|---|---|---|
+| `user` | `cwd, entrypoint, gitBranch, isSidechain, message, parentUuid, promptId, sessionId, timestamp, type, userType, uuid, version` | `permissionMode, sourceToolAssistantUUID, toolUseResult, mcpMeta, isMeta, sourceToolUseID` |
+| `assistant` | `cwd, entrypoint, gitBranch, isSidechain, message, parentUuid, requestId, sessionId, timestamp, type, userType, uuid, version` | `attributionPlugin, attributionSkill, isApiErrorMessage, apiErrorStatus, error` |
+| `attachment` | `attachment, cwd, entrypoint, gitBranch, isSidechain, parentUuid, sessionId, timestamp, type, userType, uuid, version` | — |
+| `system` | `cwd, entrypoint, gitBranch, isSidechain, parentUuid, sessionId, subtype, timestamp, type, userType, uuid, version` | `content, durationMs, hasOutput, hookCount, hookErrors, hookInfos, isMeta, level, messageCount, preventedContinuation, stopReason, toolUseID, url` |
+| `file-history-snapshot` | `isSnapshotUpdate, messageId, snapshot, type` | — |
+| `last-prompt` | `leafUuid, sessionId, type` | `lastPrompt` |
+| `permission-mode` | `permissionMode, sessionId, type` | — |
+| `ai-title` | `aiTitle, sessionId, type` | — |
+| `queue-operation` | `operation, sessionId, timestamp, type` | `content` |
+
+Notes for the line-parser implementation:
+
+- `type` is always present (no untyped lines were observed).
+- The "conversation" tuple `(user, assistant, attachment, system)`
+  is the rich form: full provenance (`uuid`, `parentUuid`,
+  `sessionId`, `timestamp`, `cwd`, `gitBranch`, `version`,
+  `userType`, `entrypoint`, `isSidechain`) plus a payload
+  (`message`, `attachment`, or `subtype`-tagged system metadata).
+  Sesshin's normalizer maps these to its own event vocabulary.
+- The "metadata" tuple (`file-history-snapshot`, `last-prompt`,
+  `permission-mode`, `ai-title`, `queue-operation`) is sparser —
+  no `cwd`/`uuid`/`parentUuid`/`timestamp` on most variants. The
+  observer should not assume timestamps are present on every line;
+  it should fall back to file-watch mtime / line-arrival time
+  when constructing its own ordering.
+- `assistant` lines carry a free-form `message` whose internal shape
+  matches the Anthropic Messages API (`content[]` with `text` /
+  `tool_use` items). v1 only needs the top-level discriminator.
+- The `system` type has multiple `subtype` shapes (hook results vs
+  duration-tracking vs free-form `content`); `subtype` should be
+  treated as a secondary discriminator within `type=system`.
+
+### Append-only behavior
+
+Empirical check on the active session JSONL: the SHA-256 of the
+first N-1 lines was identical across two snapshots taken 12-15 s
+apart, and file size was monotonically non-decreasing (no
+truncation observed). This is consistent with append-only writes
+but did not capture an actual append event during the snapshot
+window because Claude Code's writer flushes new lines around the
+turn boundary, and the snapshots were taken inside a single
+sub-agent turn that hadn't yet emitted a new `assistant` line.
+
+A second consistency check: of 1616 timestamped lines in the file,
+122 (7.5 %) had a timestamp earlier than the immediately prior
+line, with maximum backward jump 11.59 s and median backward jump
+0 s. These small backward jumps are consistent with concurrent
+producers (tool-use entries timestamped at production time,
+appended at flush time) writing to a single appended file rather
+than with mid-file rewrites — a rewrite would not preserve the
+prior tail's bytes (which the prefix-hash check confirmed are
+stable).
+
+**Conclusion:** Append-only is **strongly indicated but not
+formally proven** in this run. The implementation can rely on
+append-only semantics for read-side tailing (the prefix-hash check
+confirms prior bytes are not rewritten in the snapshot window).
+v1's observer must still tolerate:
+
+- Lines arriving in non-monotonic timestamp order. Order by file
+  position, not by `timestamp` field.
+- Partial last-line writes during reads. Buffer the trailing
+  fragment and re-parse on the next size-grew event.
+- Concurrent-producer interleaving: a `user` tool-result line
+  may appear after an unrelated `assistant` line whose timestamp
+  is later. This is normal.
+
+Mid-write corruption (writer crash mid-line) is out of scope per
+the task brief; the observer's recovery is to skip an unparseable
+line and continue.
+
+### Implication for v1 implementation
+
+- `session-file-path.ts` derives `<encoded-cwd>` via
+  `cwd.replaceAll('/', '-').replaceAll('.', '-')` and joins with
+  `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`. No
+  reverse-mapping is needed; the cwd is always known to the hub
+  when it spawns the agent.
+- `session-file-tail.ts` watches via fs.watch / chokidar size
+  events, parses line-by-line on the appended bytes, buffers any
+  trailing partial line for the next event, and emits a
+  `{ type, raw }` tuple per parsed line. It must not assume
+  timestamp-ordered emission and must not assume every line has
+  a timestamp.
+- `normalize-jsonl.ts` switches on `type` (and `subtype` for
+  `system`) using the table above. Unknown future `type` values
+  should be passed through as `agent-internal` rather than
+  dropped, mirroring the Gemini event-passthrough policy in
+  Section "Decisions locked in by these results".
+
