@@ -4,9 +4,9 @@
   "type": "module",
   "private": true,
   "exports": {
-    ".": { "import": "./dist/index.js", "types": "./dist/index.d.ts" },
-    "./crypto": { "import": "./dist/crypto.js", "types": "./dist/crypto.d.ts" },
-    "./protocol": { "import": "./dist/protocol.js", "types": "./dist/protocol.d.ts" }
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./crypto": { "types": "./dist/crypto.d.ts", "import": "./dist/crypto.js" },
+    "./protocol": { "types": "./dist/protocol.d.ts", "import": "./dist/protocol.js" }
   },
   "scripts": {
     "build": "tsup",
