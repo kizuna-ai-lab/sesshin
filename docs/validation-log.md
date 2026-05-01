@@ -977,10 +977,10 @@ was captured.
 ```
 cd /tmp
 claude --settings /tmp/sesshin-gate3-settings.json \
-  -p 'list the current directory then exit'
+  -p '<benign synthetic prompt>'
 ```
 
-The session printed `Listed `/tmp`. Exiting.` and terminated. Six
+The session printed `<short acknowledgement string>` and terminated. Six
 events fired; `StopFailure` did not (no error condition occurred).
 
 ### Privacy note
