@@ -1,5 +1,6 @@
 import nacl from 'tweetnacl';
-import { decodeBase64, encodeBase64, decodeUTF8, encodeUTF8 } from 'tweetnacl-util';
+import naclUtil from 'tweetnacl-util';
+const { decodeBase64, encodeBase64, decodeUTF8, encodeUTF8 } = naclUtil;
 
 /** Derive a 32-byte symmetric key from a token via SHA-512 truncation. */
 export function deriveKey(token: string): Uint8Array {
