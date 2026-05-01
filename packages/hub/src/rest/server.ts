@@ -3,7 +3,11 @@ import type { AddressInfo } from 'node:net';
 import { z } from 'zod';
 import type { SessionRegistry } from '../registry/session-registry.js';
 
-export interface RestServerDeps { registry: SessionRegistry }
+export interface RestServerDeps {
+  registry: SessionRegistry;
+  /** Fired when a valid hook event arrives. Wired in T26. */
+  onHookEvent?: (envelope: { agent: string; sessionId: string; ts: number; event: string; raw: Record<string, unknown> }) => void;
+}
 
 export interface RestServer {
   listen(port: number, host: string): Promise<void>;
@@ -18,6 +22,14 @@ const RegisterBody = z.object({
   cwd:             z.string(),
   pid:             z.number().int(),
   sessionFilePath: z.string(),
+});
+
+const HookBody = z.object({
+  agent:     z.enum(['claude-code','codex','gemini','other']),
+  sessionId: z.string(),
+  ts:        z.number().int(),
+  event:     z.string(),
+  raw:       z.record(z.string(), z.unknown()),
 });
 
 export function createRestServer(deps: RestServerDeps): RestServer {
@@ -62,7 +74,24 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     if (method === 'DELETE') return unregisterSession(id, res, deps);
     return void res.writeHead(405).end();
   }
+
+  if (url.pathname === '/hooks') {
+    if (method !== 'POST') return void res.writeHead(405).end();
+    return ingestHook(req, res, deps);
+  }
   res.writeHead(404).end();
+}
+
+async function ingestHook(req: IncomingMessage, res: ServerResponse, deps: RestServerDeps): Promise<void> {
+  let body: unknown;
+  try { body = await readJson(req); } catch { return void res.writeHead(400).end('bad json'); }
+  const parsed = HookBody.safeParse(body);
+  if (!parsed.success) return void res.writeHead(400).end();
+  if (!deps.registry.get(parsed.data.sessionId)) return void res.writeHead(404).end();
+  // Real ingest pipeline lands in T26 (observers/hook-ingest.ts).
+  // For now we just acknowledge; the registry is updated in observers/.
+  deps.onHookEvent?.(parsed.data);
+  res.writeHead(204).end();
 }
 
 function health(method: string, res: ServerResponse): void {
