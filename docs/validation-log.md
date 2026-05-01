@@ -953,3 +953,159 @@ line and continue.
   dropped, mirroring the Gemini event-passthrough policy in
   Section "Decisions locked in by these results".
 
+## 12.3 Hook event JSON shapes (run 2026-05-02)
+
+Verification gate 3 (M0/T3) for the design assumption that Claude
+Code's seven hook event types deliver well-typed JSON on stdin to
+`type=command` hooks, and that the field set per event is stable
+enough to model with zod schemas. These findings drive
+`packages/shared/src/hook-events.ts` (normalized vocabulary) and
+`packages/hub/src/agents/claude/normalize-hook.ts` (T24 — payload
+translation), and the zod schemas in T7 and T10.
+
+### Setup
+
+A capture script at `/tmp/sesshin-gate3-capture.sh` read each hook's
+stdin and appended one JSON object per line to
+`/tmp/sesshin-gate3-events.jsonl`. A settings file at
+`/tmp/sesshin-gate3-settings.json` registered the same script under
+all seven hook event types with `matcher: "*"` so every fired event
+was captured.
+
+### Command
+
+```
+cd /tmp
+claude --settings /tmp/sesshin-gate3-settings.json \
+  -p 'list the current directory then exit'
+```
+
+The session printed `Listed `/tmp`. Exiting.` and terminated. Six
+events fired; `StopFailure` did not (no error condition occurred).
+
+### Privacy note
+
+Only KEY NAMES and TYPE / SHAPE are documented below. No prompt
+content, tool input/output values, file contents, session IDs,
+transcript paths, or last-assistant message text appear in this log.
+String-length indicators are omitted — even a length is a fingerprint.
+
+### Per-event top-level shapes (observed)
+
+Every event delivered a single JSON object on stdin. All six observed
+events carry `hook_event_name: <str>`, `cwd: <str>`, `session_id:
+<str>`, and `transcript_path: <str>` — the common provenance tuple.
+Tool-related and conversation-related events add to that.
+
+| `hook_event_name` | Top-level keys (observed) |
+|---|---|
+| `SessionStart`     | `cwd, hook_event_name, session_id, source, transcript_path` |
+| `UserPromptSubmit` | `cwd, hook_event_name, permission_mode, prompt, session_id, transcript_path` |
+| `PreToolUse`       | `cwd, hook_event_name, permission_mode, session_id, tool_input, tool_name, tool_use_id, transcript_path` |
+| `PostToolUse`      | `cwd, duration_ms, hook_event_name, permission_mode, session_id, tool_input, tool_name, tool_response, tool_use_id, transcript_path` |
+| `Stop`             | `cwd, hook_event_name, last_assistant_message, permission_mode, session_id, stop_hook_active, transcript_path` |
+| `SessionEnd`       | `cwd, hook_event_name, reason, session_id, transcript_path` |
+| `StopFailure`      | **not observed** — no error path was triggered in this run; payload shape unknown, to be captured in a future gate |
+
+### Per-field type / shape (observed)
+
+All keys below are documented by SHAPE ONLY.
+
+- **`SessionStart`**:
+  - `cwd: <str>`, `hook_event_name: <str>`, `session_id: <str>`,
+    `transcript_path: <str>`, `source: <str>` (string discriminator;
+    likely values are `startup` / `resume` / `clear` per Claude
+    Code docs but only one value was observed in this run).
+
+- **`UserPromptSubmit`**:
+  - common provenance + `permission_mode: <str>`, `prompt: <str>`.
+  - `prompt` is a flat string (NOT an object). v1's normalizer can
+    treat it as the user's literal text, and any redaction must
+    happen on the string itself.
+
+- **`PreToolUse`**:
+  - common provenance + `permission_mode: <str>`, `tool_name: <str>`,
+    `tool_use_id: <str>`, `tool_input: <object>`.
+  - `tool_input` is a tool-specific object. For the Bash tool
+    invocation observed in this run, the keys were `command: <str>`
+    and `description: <str>`. Other tools (Read, Edit, Glob, Grep,
+    Write, etc.) will produce different sub-shapes — the v1 normalizer
+    must NOT hard-code `tool_input.command`; it should preserve the
+    sub-object opaquely and rely on `tool_name` for routing. Tool-by-
+    tool sub-shape coverage is out of scope for this gate.
+
+- **`PostToolUse`**:
+  - all of `PreToolUse`'s fields plus `duration_ms: <int>` and
+    `tool_response: <object>`.
+  - `tool_response` for Bash had keys
+    `interrupted: <bool>, isImage: <bool>, noOutputExpected: <bool>,
+    stderr: <str>, stdout: <str>`. Other tools will produce different
+    sub-shapes. As with `tool_input`, the normalizer should preserve
+    `tool_response` opaquely and route on `tool_name`.
+
+- **`Stop`**:
+  - common provenance + `permission_mode: <str>`,
+    `stop_hook_active: <bool>`, `last_assistant_message: <str>`.
+  - `last_assistant_message` is a flat string. `stop_hook_active`
+    is the documented re-entry guard — true when this Stop hook is
+    itself running inside a previous Stop hook's continuation; the
+    normalizer should propagate it so v1's stop-hook logic can avoid
+    infinite loops.
+
+- **`SessionEnd`**:
+  - common provenance + `reason: <str>`. The string is a discriminator
+    for the termination cause (per Claude Code docs typically
+    `clear` / `logout` / `prompt_input_exit` / `other`); only one
+    value was seen in this run.
+
+- **`StopFailure`**: not observed. Treat as "shape unknown until a
+  future gate exercises an error path" (e.g. by injecting a hook
+  that exits non-zero on `Stop`, or by terminating a tool call).
+
+### Cross-event invariants
+
+- `hook_event_name` is the authoritative discriminator. v1's zod
+  schema should be a discriminated union on this field.
+- Common provenance (`cwd, session_id, transcript_path`) is present
+  on all six observed events. v1's normalizer can lift these into a
+  shared base type.
+- `permission_mode` appears on the four conversational events
+  (`UserPromptSubmit, PreToolUse, PostToolUse, Stop`) but NOT on
+  `SessionStart` / `SessionEnd` — those are session-lifecycle, not
+  turn-scoped.
+- `tool_use_id` correlates `PreToolUse` and `PostToolUse` for the
+  same tool call; v1's hub uses this to compute durations
+  client-side if needed (though `PostToolUse` already carries
+  `duration_ms`).
+- All events arrive on stdin as a single JSON object terminated by
+  EOF (the capture script reads with `cat -` and the resulting
+  `.jsonl` has one well-formed object per separator).
+
+### Implication for v1 implementation
+
+- `packages/shared/src/hook-events.ts` defines a discriminated
+  union of seven variants keyed on `hook_event_name`. Six variants
+  use the observed shapes above; `StopFailure` uses a permissive
+  shape (common provenance + `passthrough: unknown`) until a future
+  gate confirms its fields. Unknown future hook event names should
+  pass through as `agent-internal`, mirroring the Gemini and JSONL
+  passthrough policies.
+- `packages/hub/src/agents/claude/normalize-hook.ts` (T24)
+  preserves `tool_input` and `tool_response` as opaque objects and
+  routes on `tool_name` rather than peering into sub-fields. Tool-
+  specific sub-schemas can be added in a later milestone if any
+  Sesshin feature requires them.
+- The zod schemas in T7 / T10 model the common provenance tuple as
+  a base object spread into each variant, with the additional
+  fields per the table above. `permission_mode`, `source`, and
+  `reason` are kept as `z.string()` rather than `z.enum(...)` so
+  the schema does not reject hypothetical future values; the hub
+  can narrow to known enums at a higher layer.
+
+### Cleanup
+
+`/tmp/sesshin-gate3-capture.sh`, `/tmp/sesshin-gate3-settings.json`,
+and `/tmp/sesshin-gate3-events.jsonl` were removed after inspection.
+The `claude -p` call consumed one model invocation (default model,
+no `--model` flag passed) against the user's Max-tier subscription.
+
