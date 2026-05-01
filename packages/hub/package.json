@@ -1,0 +1,25 @@
+{
+  "name": "@sesshin/hub",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "bin": { "sesshin-hub": "bin/sesshin-hub" },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@sesshin/shared": "workspace:*",
+    "ws": "^8.18.0",
+    "pino": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "msw": "^2.4.0",
+    "tsup": "^8.3.0",
+    "vitest": "^2.1.0"
+  }
+}
