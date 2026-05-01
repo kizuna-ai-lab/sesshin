@@ -42,3 +42,18 @@ describe('/api/sessions', () => {
     expect(r.status).toBe(400);
   });
 });
+
+describe('heartbeat', () => {
+  it('POST /api/sessions/:id/heartbeat updates lastHeartbeat', async () => {
+    const before = Date.now();
+    registry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const r = await fetch(`http://127.0.0.1:${port}/api/sessions/s1/heartbeat`, { method: 'POST' });
+    expect(r.status).toBe(204);
+    const rec = registry.get('s1');
+    expect(rec!.lastHeartbeat).toBeGreaterThanOrEqual(before);
+  });
+  it('returns 404 for unknown session', async () => {
+    const r = await fetch(`http://127.0.0.1:${port}/api/sessions/missing/heartbeat`, { method: 'POST' });
+    expect(r.status).toBe(404);
+  });
+});

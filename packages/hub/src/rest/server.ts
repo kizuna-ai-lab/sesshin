@@ -49,6 +49,13 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     if (method === 'POST') return registerSession(req, res, deps);
     return void res.writeHead(405).end();
   }
+  const hb = url.pathname.match(/^\/api\/sessions\/([^/]+)\/heartbeat$/);
+  if (hb) {
+    const id = hb[1]!;
+    if (method !== 'POST') return void res.writeHead(405).end();
+    const ok = deps.registry.recordHeartbeat(id);
+    return void res.writeHead(ok ? 204 : 404).end();
+  }
   const m = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
   if (m) {
     const id = m[1]!;

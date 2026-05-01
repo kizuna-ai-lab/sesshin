@@ -28,6 +28,7 @@ export interface RegistryEvents {
 export interface SessionRecord extends SessionInfo {
   sessionFilePath: string;
   fileTailCursor: number;
+  lastHeartbeat: number;
 }
 
 export class SessionRegistry extends EventEmitter {
@@ -46,6 +47,7 @@ export class SessionRegistry extends EventEmitter {
       lastSummaryId: null,
       sessionFilePath: input.sessionFilePath,
       fileTailCursor: 0,
+      lastHeartbeat: Date.now(),
     };
     this.sessions.set(rec.id, rec);
     this.emit('session-added', this.publicView(rec));
@@ -87,8 +89,15 @@ export class SessionRegistry extends EventEmitter {
     if (s) s.fileTailCursor = cursor;
   }
 
+  recordHeartbeat(id: string): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    s.lastHeartbeat = Date.now();
+    return true;
+  }
+
   private publicView(s: SessionRecord): SessionInfo {
-    const { sessionFilePath: _f, fileTailCursor: _c, ...pub } = s;
+    const { sessionFilePath: _f, fileTailCursor: _c, lastHeartbeat: _h, ...pub } = s;
     return pub;
   }
 
