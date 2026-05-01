@@ -1109,3 +1109,161 @@ and `/tmp/sesshin-gate3-events.jsonl` were removed after inspection.
 The `claude -p` call consumed one model invocation (default model,
 no `--model` flag passed) against the user's Max-tier subscription.
 
+## 12.4 PTY input injection (run 2026-05-02)
+
+Verification gate 4 (M0/T4) for the design assumption that bytes
+written to a `node-pty` PTY's master side (via `pty.write()`) reach
+the child process as if typed on a real keyboard. This informs
+`packages/cli/src/pty-wrap.ts` (T51 — basic node-pty spawn around
+`claude`), `packages/cli/src/inject-listener.ts` (T56 — inject bytes
+from a hub-driven channel as user input), and
+`packages/hub/src/agents/claude/action-map.ts` (T38 — whether `'y\n'`
+is the right byte sequence for the `approve` action).
+
+### Setup
+
+`node-pty@latest` was installed under a throwaway `/tmp/package.json`
+and used from two probe scripts. `claude` resolves to
+`/home/jiangzhuo/.local/bin/claude` (version `2.1.126`). Node was
+v24.3.0.
+
+### Run A — original `-p` probe (per task brief)
+
+The probe spawned `claude -p '<prompt asking claude to await
+confirmation>'` via PTY (cols 100 × rows 30, `xterm-256color`),
+buffered all PTY output, and after a 5000 ms timer wrote `'y\n'` to
+the PTY master.
+
+Observed:
+
+- claude printed `GO` followed by terminal control sequences and
+  exited.
+- At t+5000 ms the probe called `p.write('y\n')`. The call returned
+  without throwing; `y` and `\n` were observably echoed in the PTY
+  output between the timer log and the exit event.
+- `onExit` fired with `exitCode=0` at wall=5700 ms.
+- Total PTY stdout: 153 bytes.
+
+A baseline run with the same prompt and **no input injection** exited
+at wall=4993 ms with 150 bytes of output. The 700 ms gap between
+"injection" and "no injection" runs is consistent with normal
+per-invocation variance, not with the injected `y\n` materially
+affecting claude's behavior.
+
+**Interpretation:** in `-p` (print) mode, claude treats the entire
+turn as a single non-interactive call and does not block for user
+confirmation, regardless of how the prompt is phrased. The injected
+`y\n` arrived *while* claude was still alive (the write succeeded and
+its bytes echoed) but was a no-op as far as claude's reply was
+concerned — the final answer had already been emitted. PTY input
+injection during a `-p` call is therefore moot. The brief predicted
+this outcome; it is now empirically confirmed.
+
+### Run B — generic PTY round-trip (sanity check on the mechanism)
+
+To separate "did the bytes get through to the child" from "does claude
+in `-p` mode care", a second probe spawned `cat` via the same
+node-pty config and exercised the write path with `cat`'s default
+behavior of echoing stdin to stdout.
+
+Sequence:
+
+- t+200 ms: `p.write('hello\n')`
+- t+500 ms: `p.write('y\n')`
+- t+1000 ms: `p.write('\x04')` (Ctrl-D, EOF)
+
+Observed bytes received from PTY (escaped):
+`"hello\r\nhello\r\ny\r\ny\r\n"`. `cat` exited cleanly with
+`exitCode=0` at wall=1000 ms — i.e. the EOF byte caused the child to
+finish and close its stdin/stdout, and node-pty surfaced that as a
+normal exit.
+
+Each line appears twice because the PTY's line discipline is in
+cooked mode by default: the kernel echoes incoming bytes back to the
+master (first copy) AND `cat` reads them on stdin and writes them
+back to stdout (second copy). The injected bytes were therefore both
+visible to the kernel echo path and consumed by the child as
+ordinary input. `'\n'` is translated to `'\r\n'` on output by the
+ONLCR setting; the byte sent across the master remains `'\n'`.
+
+**Conclusion of Run B:** node-pty's `write()` delivers bytes that the
+child process reads as if typed. `'y\n'` is a valid byte sequence for
+"the user pressed `y` and Enter", and Ctrl-D as `\x04` is a valid EOF
+signal. There is no node-pty bug or kernel-level mistranslation in
+the way of T56's input-injection plan.
+
+### Was the gate's question conclusively answered?
+
+Partially. Concretely:
+
+- ✅ **PTY byte delivery works.** Bytes written to the master side
+  reach the child's stdin. `'y\n'` round-trips via `cat`.
+- ✅ **node-pty is a usable foundation for T51.** No surprises in the
+  spawn / write / onData / onExit lifecycle; the API behaves as
+  documented.
+- ⚠️ **"Identical to a typed key" is unproven for the interactive
+  claude TUI.** Once `claude` is launched without `-p`, it puts its
+  TTY into raw mode and almost certainly enables bracketed-paste
+  mode. In raw mode the kernel does NOT translate `\n` to `\r\n`,
+  does NOT echo, and the application sees each byte verbatim. Whether
+  claude's confirmation prompt accepts `'y\n'` (with `\n` = LF only),
+  `'y\r'` (CR only — what xterm sends for Enter), or `'y\r\n'` is a
+  TUI-implementation detail not exercised by Run A or Run B. Most
+  TUIs accept any of these three for "Enter", but the safe default
+  for T56 is to test against a real interactive session and pick
+  the byte sequence that triggers acceptance there.
+- ⚠️ **Bracketed paste & raw-mode interactions are deferred (T52).**
+  As the task brief notes, even if PTY-level injection works, the
+  real CLI may need raw-mode + bracketed-paste handling so that
+  injected bytes are not interpreted as a paste-bracket-start escape
+  sequence by the TUI's input parser. Run A and Run B do not
+  exercise that code path.
+
+A future gate (call it 12.4-bis) should:
+
+1. Launch `claude` interactive (no `-p`) via PTY.
+2. Send a benign prompt that triggers a confirmation (e.g. a tool
+   that asks for permission).
+3. Send `'y\n'`, `'y\r'`, and `'y\r\n'` in separate runs to
+   determine which byte sequence(s) are accepted.
+4. If none are accepted, retry wrapped in bracketed-paste markers
+   (`\x1b[200~y\n\x1b[201~`) to see whether the TUI is rejecting
+   non-bracketed input by default.
+
+That gate is more involved (real interactive session, real tool
+permission prompt, more potential failure modes) and is correctly
+deferred to T52's design pass rather than blocking the M0 scaffold.
+
+### Implication for v1 implementation
+
+- **T51 (`pty-wrap.ts`)**: a basic `pty.spawn('claude', args, opts)`
+  with `onData` / `onExit` listeners is sufficient for the spawn
+  layer. No raw-mode tweaks are needed at the wrapper level on Linux
+  with this version of node-pty; the child controls its own line
+  discipline once it takes over the PTY.
+- **T56 (`inject-listener.ts`)**: the byte path itself works.
+  Implementation should:
+  - Default to writing the bytes verbatim on receipt (no
+    transformation, no auto-newline normalization).
+  - Treat the action-map's byte sequence as authoritative; the
+    listener is a pure pass-through.
+  - Surface PTY write errors (e.g. EPIPE if claude has already
+    exited) as a single non-fatal warning event back to the hub
+    rather than crashing the wrapper.
+- **T38 (`action-map.ts`)**: tentatively map `approve` → `'y\n'` for
+  the v1 first slice. This is the conventional Unix shape and
+  worked at the byte level in Run B. If T52's interactive gate
+  shows claude wants `'\r'` for Enter or requires bracketed-paste
+  framing, the action map is the only place that needs to change —
+  the wrapper and listener remain pass-through.
+
+### Cleanup
+
+`/tmp/gate4-probe.mjs`, `/tmp/gate4-baseline.mjs`,
+`/tmp/gate4-pty-roundtrip.mjs`, `/tmp/package.json`,
+`/tmp/package-lock.json`, and `/tmp/node_modules/` were removed after
+inspection. The `claude -p` calls (Run A and the no-injection
+baseline) consumed two model invocations (default model, no
+`--model` flag) against the user's Max-tier subscription. Run B used
+no model.
+
