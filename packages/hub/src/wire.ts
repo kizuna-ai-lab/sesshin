@@ -22,6 +22,17 @@ import { runModeB } from './summarizer/mode-b.js';
 import { wireSummarizerTrigger } from './summarizer-trigger.js';
 import { ApprovalManager } from './approval-manager.js';
 import { parsePolicy, shouldGatePreToolUse } from './agents/claude/approval-policy.js';
+import { getHandler, setCatchAllToolName } from './agents/claude/tool-handlers/registry.js';
+import type { ToolHandler, HandlerCtx } from './agents/claude/tool-handlers/types.js';
+
+interface PendingHandlerSlot {
+  handler:   ToolHandler;
+  ctx:       HandlerCtx;
+  toolInput: Record<string, unknown>;
+  tool:      string;
+}
+const pendingHandlers = new Map<string, PendingHandlerSlot>();
+const pendingUpdatedInput = new Map<string, Record<string, unknown>>();
 
 export interface HubInstance {
   rest: RestServer;
@@ -138,8 +149,18 @@ export async function startHub(): Promise<HubInstance> {
       const knownMode = session?.substate.permissionMode;
       if (!shouldGatePreToolUse(env.raw, knownMode, approvalGate)) return null;
       const tool = typeof env.raw['tool_name'] === 'string' ? env.raw['tool_name'] : 'unknown';
-      const toolInput = env.raw['tool_input'] ?? null;
+      const toolInput = (env.raw['tool_input'] as Record<string, unknown>) ?? {};
       const toolUseId = typeof env.raw['tool_use_id'] === 'string' ? env.raw['tool_use_id'] : undefined;
+
+      setCatchAllToolName(tool);
+      const handler = getHandler(tool);
+      const ctx: HandlerCtx = {
+        permissionMode: knownMode ?? 'default',
+        cwd: session?.cwd ?? process.cwd(),
+        sessionAllowList: session?.sessionAllowList ?? [],
+      };
+      const rendered = handler.render(toolInput, ctx);
+
       const { request, decision } = approvals.open({
         sessionId: env.sessionId, tool, toolInput,
         ...(toolUseId !== undefined ? { toolUseId } : {}),
@@ -150,34 +171,29 @@ export async function startHub(): Promise<HubInstance> {
           });
         },
       });
+
       registry.updateState(env.sessionId, 'awaiting-confirmation');
-      const synthQuestions = [{
-        prompt: `Run ${tool}?`,
-        header: tool.slice(0, 12),
-        multiSelect: false,
-        allowFreeText: false,
-        options: [
-          { key: 'allow', label: 'Yes' },
-          { key: 'deny',  label: 'No' },
-          { key: 'ask',   label: 'Ask on laptop' },
-        ],
-      }];
       wsRef?.broadcast({
         type: 'session.prompt-request',
         sessionId: env.sessionId,
         requestId: request.requestId,
-        origin: 'permission',
+        origin: rendered.origin ?? 'permission',
         toolName: tool,
         ...(toolUseId !== undefined ? { toolUseId } : {}),
         expiresAt: request.expiresAt,
-        body: '```json\n' + JSON.stringify(toolInput, null, 2) + '\n```',
-        questions: synthQuestions,
+        ...(rendered.body !== undefined ? { body: rendered.body } : {}),
+        questions: rendered.questions,
       });
+
+      pendingHandlers.set(request.requestId, { handler, ctx, toolInput, tool });
+
       const out = await decision;
       // Whichever path ended the approval, restore the session to running so
       // the laptop and remote can keep typing.
       registry.updateState(env.sessionId, 'running');
-      return out;
+      const ui = pendingUpdatedInput.get(request.requestId);
+      pendingUpdatedInput.delete(request.requestId);
+      return { ...out, ...(ui ? { updatedInput: ui } : {}) };
     },
   });
   await rest.listen(config.internalPort, config.internalHost);
@@ -194,12 +210,47 @@ export async function startHub(): Promise<HubInstance> {
       return { ok: r.ok, ...(r.reason !== undefined ? { reason: r.reason } : {}) };
     },
     onPromptResponse: (sessionId, requestId, answers) => {
-      const key = answers[0]?.selectedKeys[0];
-      let decision: 'allow' | 'deny' | 'ask' = 'ask';
-      if (key === 'allow') decision = 'allow';
-      else if (key === 'deny') decision = 'deny';
-      const reason = answers[0]?.freeText;
-      const ok = approvals.decide(requestId, { decision, ...(reason !== undefined ? { reason } : {}) });
+      const slot = pendingHandlers.get(requestId);
+      if (!slot) return false;
+      pendingHandlers.delete(requestId);
+      const decision = slot.handler.decide(answers, slot.toolInput, slot.ctx);
+
+      let outcome: { decision: 'allow' | 'deny' | 'ask'; reason?: string };
+      switch (decision.kind) {
+        case 'passthrough':
+          outcome = { decision: 'ask', reason: 'sesshin: handler passthrough' };
+          break;
+        case 'allow':
+          outcome = {
+            decision: 'allow',
+            ...(decision.additionalContext ? { reason: decision.additionalContext } : {}),
+          };
+          break;
+        case 'deny':
+          outcome = {
+            decision: 'deny',
+            ...(decision.additionalContext
+              ? { reason: decision.additionalContext }
+              : decision.reason !== undefined
+                ? { reason: decision.reason }
+                : {}),
+          };
+          break;
+        case 'ask':
+          outcome = { decision: 'ask', ...(decision.reason ? { reason: decision.reason } : {}) };
+          break;
+      }
+
+      if (decision.kind === 'allow' && decision.sessionAllowAdd) {
+        const rec = registry.get(sessionId);
+        if (rec) rec.sessionAllowList.push(decision.sessionAllowAdd);
+      }
+
+      if (decision.kind === 'allow' && decision.updatedInput) {
+        pendingUpdatedInput.set(requestId, decision.updatedInput);
+      }
+
+      const ok = approvals.decide(requestId, outcome);
       if (ok) {
         ws.broadcast({
           type: 'session.prompt-request.resolved',

@@ -28,7 +28,11 @@ export interface RestServerDeps {
    */
   onPreToolUseApproval?: (envelope: {
     agent: string; sessionId: string; ts: number; event: string; raw: Record<string, unknown>;
-  }) => Promise<{ decision: 'allow' | 'deny' | 'ask'; reason?: string } | null>;
+  }) => Promise<{
+    decision: 'allow' | 'deny' | 'ask';
+    reason?: string;
+    updatedInput?: Record<string, unknown>;
+  } | null>;
 }
 
 export interface RestServer {
@@ -167,7 +171,11 @@ async function ingestHook(req: IncomingMessage, res: ServerResponse, deps: RestS
   // timeout is 600s. The client never sees this HTTP request directly; it
   // sends its decision over the WS protocol instead.
   if (parsed.data.event === 'PreToolUse' && deps.onPreToolUseApproval) {
-    let outcome: { decision: 'allow' | 'deny' | 'ask'; reason?: string } | null;
+    let outcome: {
+      decision: 'allow' | 'deny' | 'ask';
+      reason?: string;
+      updatedInput?: Record<string, unknown>;
+    } | null;
     try {
       outcome = await deps.onPreToolUseApproval(parsed.data);
     } catch {
@@ -182,11 +190,19 @@ async function ingestHook(req: IncomingMessage, res: ServerResponse, deps: RestS
       res.writeHead(204).end();
       return;
     }
-    const out = {
+    const out: {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse';
+        permissionDecision: 'allow' | 'deny' | 'ask';
+        permissionDecisionReason?: string;
+        updatedInput?: Record<string, unknown>;
+      };
+    } = {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: outcome.decision,
         ...(outcome.reason !== undefined ? { permissionDecisionReason: outcome.reason } : {}),
+        ...(outcome.updatedInput !== undefined ? { updatedInput: outcome.updatedInput } : {}),
       },
     };
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(out));

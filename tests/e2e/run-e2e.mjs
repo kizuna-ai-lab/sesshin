@@ -82,7 +82,7 @@ async function main() {
       ws.send(JSON.stringify({
         type: 'prompt-response',
         sessionId: msg.sessionId, requestId: msg.requestId,
-        answers: [{ questionIndex: 0, selectedKeys: ['allow'], freeText: 'e2e: auto-approve' }],
+        answers: [{ questionIndex: 0, selectedKeys: ['yes'], freeText: 'e2e: auto-approve' }],
       }));
     }
     if (msg.type === 'session.prompt-request.resolved') got.confirmationResolved += 1;
