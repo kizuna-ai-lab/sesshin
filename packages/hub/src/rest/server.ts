@@ -12,6 +12,10 @@ export interface RestServerDeps {
   tap?: PtyTap;
   /** Called when the hub itself wants to push input back into the CLI. Wired in T39. */
   onInjectFromHub?: (sessionId: string, data: string, source: string) => Promise<boolean>;
+  /** When CLI opens the sink-stream, hub registers a delivery function for that session. */
+  onAttachSink?: (sessionId: string, deliver: (data: string, source: string) => Promise<void>) => void;
+  /** Called when the CLI sink-stream connection closes (so the bridge can drop the sink). */
+  onDetachSink?: (sessionId: string) => void;
 }
 
 export interface RestServer {
@@ -78,6 +82,20 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     for await (const c of req) chunks.push(c as Buffer);
     deps.tap.append(id, Buffer.concat(chunks));
     return void res.writeHead(204).end();
+  }
+  const sink = url.pathname.match(/^\/api\/sessions\/([^/]+)\/sink-stream$/);
+  if (sink) {
+    const id = sink[1]!;
+    if (method !== 'POST') return void res.writeHead(405).end();
+    if (!deps.registry.get(id)) return void res.writeHead(404).end();
+    res.writeHead(200, { 'content-type': 'application/x-ndjson', 'cache-control': 'no-cache' });
+    deps.onAttachSink?.(id, async (data, source) => {
+      res.write(JSON.stringify({ data, source }) + '\n');
+    });
+    const detach = (): void => { deps.onDetachSink?.(id); };
+    req.on('close', detach);
+    res.on('close', detach);
+    return;
   }
   const inj = url.pathname.match(/^\/api\/sessions\/([^/]+)\/inject$/);
   if (inj) {

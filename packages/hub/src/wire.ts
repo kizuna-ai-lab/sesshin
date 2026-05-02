@@ -10,12 +10,16 @@ import { Dedup } from './observers/dedup.js';
 import { PtyTap } from './observers/pty-tap.js';
 import { tailSessionFile } from './observers/session-file-tail.js';
 import { createRestServer, type RestServer } from './rest/server.js';
+import { createWsServer, type WsServerInstance } from './ws/server.js';
+import { InputBridge } from './input-bridge.js';
 
 export interface HubInstance {
   rest: RestServer;
+  ws: WsServerInstance;
   registry: SessionRegistry;
   bus: EventBus;
   tap: PtyTap;
+  bridge: InputBridge;
   shutdown: () => Promise<void>;
 }
 
@@ -25,6 +29,7 @@ export async function startHub(): Promise<HubInstance> {
   const tap      = new PtyTap({ ringBytes: config.rawRingBytes });
   const checkpoint = new Checkpoint(registry, { path: config.sessionsCheckpointFile, debounceMs: 100 });
   const dedup    = new Dedup({ windowMs: 2000 });
+  const bridge   = new InputBridge();
 
   // Restore from checkpoint (best-effort).
   for (const r of checkpoint.load().sessions) {
@@ -66,19 +71,37 @@ export async function startHub(): Promise<HubInstance> {
     stopTails.get(id)?.();
     stopTails.delete(id);
     tap.drop(id);
+    bridge.clearSink(id);
   });
   for (const s of registry.list()) startTail(s.id);
 
   // REST server
-  const rest = createRestServer({ registry, tap, onHookEvent });
+  const rest = createRestServer({
+    registry, tap, onHookEvent,
+    onInjectFromHub: (id, data, source) => bridge.deliver(id, data, source).then((r) => r.ok),
+    onAttachSink: (id, deliver) => { bridge.setSink(id, deliver); },
+    onDetachSink: (id) => { bridge.clearSink(id); },
+  });
   await rest.listen(config.internalPort, config.internalHost);
   log.info({ port: config.internalPort }, 'hub REST listening');
 
+  // WS server
+  const ws = createWsServer({
+    registry, bus: dedupedBus, tap, staticDir: null,
+    onInput: async (sessionId, data, source) => {
+      const r = await bridge.deliver(sessionId, data, source);
+      return { ok: r.ok, ...(r.reason !== undefined ? { reason: r.reason } : {}) };
+    },
+  });
+  await ws.listen(config.publicPort, config.publicHost);
+  log.info({ port: config.publicPort }, 'hub WS listening');
+
   return {
-    rest, registry, bus, tap,
+    rest, ws, registry, bus, tap, bridge,
     shutdown: async () => {
       for (const s of stopTails.values()) s();
       checkpoint.stop();
+      await ws.close();
       await rest.close();
     },
   };
