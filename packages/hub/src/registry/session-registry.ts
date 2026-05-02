@@ -32,6 +32,9 @@ export interface SessionRecord extends SessionInfo {
   lastHeartbeat: number;
   claudeAllowRules: string[];
   sessionAllowList: string[];
+  sessionGateOverride: 'disabled' | 'auto' | 'always' | null;
+  pin: string | null;
+  quietUntil: number | null;
 }
 
 export class SessionRegistry extends EventEmitter {
@@ -53,6 +56,9 @@ export class SessionRegistry extends EventEmitter {
       lastHeartbeat: Date.now(),
       claudeAllowRules: [],
       sessionAllowList: [],
+      sessionGateOverride: null,
+      pin: null,
+      quietUntil: null,
     };
     this.sessions.set(rec.id, rec);
     this.emit('session-added', this.publicView(rec));
@@ -132,10 +138,60 @@ export class SessionRegistry extends EventEmitter {
     return true;
   }
 
+  addSessionAllow(id: string, rule: string): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    if (s.sessionAllowList.includes(rule)) return false;
+    s.sessionAllowList.push(rule);
+    return true;
+  }
+
+  removeSessionAllow(id: string, rule: string): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    const before = s.sessionAllowList.length;
+    s.sessionAllowList = s.sessionAllowList.filter((r) => r !== rule);
+    return s.sessionAllowList.length !== before;
+  }
+
+  setSessionGateOverride(id: string, p: 'disabled' | 'auto' | 'always'): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    s.sessionGateOverride = p;
+    return true;
+  }
+
+  getSessionGateOverride(id: string): 'disabled' | 'auto' | 'always' | null {
+    return this.sessions.get(id)?.sessionGateOverride ?? null;
+  }
+
+  setPin(id: string, msg: string | null): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    s.pin = msg;
+    return true;
+  }
+
+  getPin(id: string): string | null {
+    return this.sessions.get(id)?.pin ?? null;
+  }
+
+  setQuietUntil(id: string, ts: number | null): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    s.quietUntil = ts;
+    return true;
+  }
+
+  getQuietUntil(id: string): number | null {
+    return this.sessions.get(id)?.quietUntil ?? null;
+  }
+
   private publicView(s: SessionRecord): SessionInfo {
     const {
       sessionFilePath: _f, fileTailCursor: _c, lastHeartbeat: _h,
       claudeAllowRules: _a, sessionAllowList: _l,
+      sessionGateOverride: _g, pin: _p, quietUntil: _q,
       ...pub
     } = s;
     return pub;

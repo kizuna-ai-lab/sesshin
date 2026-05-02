@@ -173,12 +173,16 @@ export async function startHub(): Promise<HubInstance> {
       // sees no extra prompts.
       const session = registry.get(env.sessionId);
       const knownMode = session?.substate.permissionMode;
+      // Per-session gate override (set via /sesshin-gate or POST /api/sessions/:id/gate)
+      // takes precedence over the env-level SESSHIN_APPROVAL_GATE policy.
+      const sessionPolicy = registry.getSessionGateOverride(env.sessionId);
+      const policyForCall = sessionPolicy ?? approvalGate;
       // hasSubscribedClient: stay transparent when no actions-capable client
       // is currently subscribed to this session. Hook handler returns 204 →
       // claude follows its native permission logic instead of waiting on a
       // ghost remote.
       const hasSubscribedClient = wsRef?.hasSubscribedActionsClient(env.sessionId) ?? false;
-      if (!shouldGatePreToolUse(env.raw, knownMode, approvalGate, {
+      if (!shouldGatePreToolUse(env.raw, knownMode, policyForCall, {
         sessionAllowList: session?.sessionAllowList ?? [],
         claudeAllowRules: session?.claudeAllowRules ?? [],
       }, hasSubscribedClient)) return null;

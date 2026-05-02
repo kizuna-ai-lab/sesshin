@@ -193,6 +193,48 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     const list = deps.historyForSession?.(id, n) ?? [];
     return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(list));
   }
+  const tm = url.pathname.match(/^\/api\/sessions\/([^/]+)\/trust$/);
+  if (tm) {
+    const id = tm[1]!;
+    if (method !== 'POST') return void res.writeHead(405).end();
+    let body: any;
+    try { body = await readJson(req); } catch { return void res.writeHead(400).end(); }
+    const rule = typeof body?.ruleString === 'string' ? body.ruleString : null;
+    if (!rule) return void res.writeHead(400).end('ruleString required');
+    if (!deps.registry.get(id)) return void res.writeHead(404).end();
+    deps.registry.addSessionAllow(id, rule);
+    return void res.writeHead(204).end();
+  }
+  const gm = url.pathname.match(/^\/api\/sessions\/([^/]+)\/gate$/);
+  if (gm) {
+    const id = gm[1]!;
+    if (method !== 'POST') return void res.writeHead(405).end();
+    let body: any;
+    try { body = await readJson(req); } catch { return void res.writeHead(400).end(); }
+    const p = body?.policy;
+    if (!['disabled', 'auto', 'always'].includes(p)) return void res.writeHead(400).end();
+    return void res.writeHead(deps.registry.setSessionGateOverride(id, p) ? 204 : 404).end();
+  }
+  const pm = url.pathname.match(/^\/api\/sessions\/([^/]+)\/pin$/);
+  if (pm) {
+    const id = pm[1]!;
+    if (method !== 'POST') return void res.writeHead(405).end();
+    let body: any;
+    try { body = await readJson(req); } catch { return void res.writeHead(400).end(); }
+    const msg = body?.message ?? null;
+    return void res.writeHead(deps.registry.setPin(id, typeof msg === 'string' ? msg : null) ? 204 : 404).end();
+  }
+  const qm = url.pathname.match(/^\/api\/sessions\/([^/]+)\/quiet$/);
+  if (qm) {
+    const id = qm[1]!;
+    if (method !== 'POST') return void res.writeHead(405).end();
+    let body: any;
+    try { body = await readJson(req); } catch { return void res.writeHead(400).end(); }
+    const ttl = Number(body?.ttlMs ?? 0);
+    if (!Number.isFinite(ttl) || ttl < 0) return void res.writeHead(400).end();
+    const until = ttl > 0 ? Date.now() + ttl : null;
+    return void res.writeHead(deps.registry.setQuietUntil(id, until) ? 204 : 404).end();
+  }
 
   res.writeHead(404).end();
 }

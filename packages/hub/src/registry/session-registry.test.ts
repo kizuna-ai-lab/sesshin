@@ -56,4 +56,51 @@ describe('SessionRegistry', () => {
     expect(events).toEqual(['auto']);
     expect(r.setPermissionMode('missing', 'plan')).toBe(false);
   });
+
+  it('addSessionAllow appends rules; idempotent on dup', () => {
+    const r = makeReg();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    expect(r.addSessionAllow('s1', 'Bash(git log:*)')).toBe(true);
+    expect(r.addSessionAllow('s1', 'Bash(git log:*)')).toBe(false);
+    expect(r.get('s1')?.sessionAllowList).toEqual(['Bash(git log:*)']);
+    expect(r.addSessionAllow('missing', 'Bash(ls:*)')).toBe(false);
+  });
+
+  it('removeSessionAllow drops a rule; returns false if absent or session missing', () => {
+    const r = makeReg();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    r.addSessionAllow('s1', 'Bash(git log:*)');
+    expect(r.removeSessionAllow('s1', 'Bash(git log:*)')).toBe(true);
+    expect(r.get('s1')?.sessionAllowList).toEqual([]);
+    expect(r.removeSessionAllow('s1', 'Bash(git log:*)')).toBe(false);
+    expect(r.removeSessionAllow('missing', 'x')).toBe(false);
+  });
+
+  it('setSessionGateOverride is read via getSessionGateOverride', () => {
+    const r = makeReg();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    expect(r.getSessionGateOverride('s1')).toBe(null);
+    expect(r.setSessionGateOverride('s1', 'always')).toBe(true);
+    expect(r.getSessionGateOverride('s1')).toBe('always');
+    expect(r.setSessionGateOverride('missing', 'auto')).toBe(false);
+    expect(r.getSessionGateOverride('missing')).toBe(null);
+  });
+
+  it('pin and quiet round-trip', () => {
+    const r = makeReg();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    expect(r.getPin('s1')).toBe(null);
+    expect(r.setPin('s1', 'hello')).toBe(true);
+    expect(r.getPin('s1')).toBe('hello');
+    expect(r.setPin('s1', null)).toBe(true);
+    expect(r.getPin('s1')).toBe(null);
+    expect(r.setPin('missing', 'x')).toBe(false);
+
+    expect(r.getQuietUntil('s1')).toBe(null);
+    expect(r.setQuietUntil('s1', 1234)).toBe(true);
+    expect(r.getQuietUntil('s1')).toBe(1234);
+    expect(r.setQuietUntil('s1', null)).toBe(true);
+    expect(r.getQuietUntil('s1')).toBe(null);
+    expect(r.setQuietUntil('missing', 1)).toBe(false);
+  });
 });
