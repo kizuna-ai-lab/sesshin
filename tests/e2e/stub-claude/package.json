@@ -1,0 +1,5 @@
+{
+  "name": "@sesshin-internal/stub-claude",
+  "private": true,
+  "type": "module"
+}
