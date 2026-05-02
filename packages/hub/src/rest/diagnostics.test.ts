@@ -265,6 +265,18 @@ describe('mutating session endpoints', () => {
     expect(registry.getPin('s1')).toBe(null);
   });
 
+  it('POST /api/sessions/:id/pin with empty string clears the pin', async () => {
+    registry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    registry.setPin('s1', 'hello');
+    expect(registry.get('s1')?.pin).toBe('hello');
+    const r = await fetch(`http://127.0.0.1:${port}/api/sessions/s1/pin`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: '' }),
+    });
+    expect(r.status).toBe(204);
+    expect(registry.get('s1')?.pin).toBeNull();
+  });
+
   it('POST /api/sessions/:id/quiet sets and clears quietUntil', async () => {
     registry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
     const before = Date.now();

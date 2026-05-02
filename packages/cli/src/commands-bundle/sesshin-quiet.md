@@ -5,7 +5,7 @@ argument-hint: <duration|off>
 ---
 
 ```bash
-sesshin quiet ${ARGUMENTS:-off} --session $SESSHIN_SESSION_ID
+sesshin quiet "${ARGUMENTS:-off}" --session $SESSHIN_SESSION_ID
 ```
 
 Confirm the quiet window or that it was cleared. Don't editorialize.

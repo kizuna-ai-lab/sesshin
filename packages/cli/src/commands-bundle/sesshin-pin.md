@@ -5,7 +5,7 @@ argument-hint: [message]
 ---
 
 ```bash
-sesshin pin ${ARGUMENTS:-} --session $SESSHIN_SESSION_ID
+sesshin pin "${ARGUMENTS:-}" --session $SESSHIN_SESSION_ID
 ```
 
 Confirm the pin (or that it was cleared if no message was given).

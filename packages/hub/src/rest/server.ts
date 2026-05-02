@@ -197,11 +197,17 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
   if (tm) {
     const id = tm[1]!;
     if (method !== 'POST') return void res.writeHead(405).end();
-    let body: any;
+    let body: unknown;
     try { body = await readJson(req); } catch { return void res.writeHead(400).end(); }
-    const rule = typeof body?.ruleString === 'string' ? body.ruleString : null;
+    const obj = (body && typeof body === 'object' ? body as Record<string, unknown> : {});
+    const rule = typeof obj['ruleString'] === 'string' ? obj['ruleString'] : null;
     if (!rule) return void res.writeHead(400).end('ruleString required');
     if (!deps.registry.get(id)) return void res.writeHead(404).end();
+    // Idempotent: addSessionAllow returns false on duplicate, but a duplicate
+    // trust request is not an error from the REST caller's perspective. We
+    // already verified the session exists with the .get() check above; a
+    // dropped boolean here means "the rule is now in the list", which is
+    // what the caller wanted regardless of whether they were the first to add it.
     deps.registry.addSessionAllow(id, rule);
     return void res.writeHead(204).end();
   }
@@ -209,28 +215,33 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
   if (gm) {
     const id = gm[1]!;
     if (method !== 'POST') return void res.writeHead(405).end();
-    let body: any;
+    let body: unknown;
     try { body = await readJson(req); } catch { return void res.writeHead(400).end(); }
-    const p = body?.policy;
-    if (!['disabled', 'auto', 'always'].includes(p)) return void res.writeHead(400).end();
-    return void res.writeHead(deps.registry.setSessionGateOverride(id, p) ? 204 : 404).end();
+    const obj = (body && typeof body === 'object' ? body as Record<string, unknown> : {});
+    const p = obj['policy'];
+    if (typeof p !== 'string' || !['disabled', 'auto', 'always'].includes(p)) return void res.writeHead(400).end();
+    return void res.writeHead(deps.registry.setSessionGateOverride(id, p as 'disabled' | 'auto' | 'always') ? 204 : 404).end();
   }
   const pm = url.pathname.match(/^\/api\/sessions\/([^/]+)\/pin$/);
   if (pm) {
     const id = pm[1]!;
     if (method !== 'POST') return void res.writeHead(405).end();
-    let body: any;
+    let body: unknown;
     try { body = await readJson(req); } catch { return void res.writeHead(400).end(); }
-    const msg = body?.message ?? null;
-    return void res.writeHead(deps.registry.setPin(id, typeof msg === 'string' ? msg : null) ? 204 : 404).end();
+    const obj = (body && typeof body === 'object' ? body as Record<string, unknown> : {});
+    const msg = obj['message'];
+    const msgStr = typeof msg === 'string' && msg.length > 0 ? msg : null;
+    return void res.writeHead(deps.registry.setPin(id, msgStr) ? 204 : 404).end();
   }
   const qm = url.pathname.match(/^\/api\/sessions\/([^/]+)\/quiet$/);
   if (qm) {
     const id = qm[1]!;
     if (method !== 'POST') return void res.writeHead(405).end();
-    let body: any;
+    let body: unknown;
     try { body = await readJson(req); } catch { return void res.writeHead(400).end(); }
-    const ttl = Number(body?.ttlMs ?? 0);
+    const obj = (body && typeof body === 'object' ? body as Record<string, unknown> : {});
+    const ttlRaw = obj['ttlMs'];
+    const ttl = Number(ttlRaw ?? 0);
     if (!Number.isFinite(ttl) || ttl < 0) return void res.writeHead(400).end();
     const until = ttl > 0 ? Date.now() + ttl : null;
     return void res.writeHead(deps.registry.setQuietUntil(id, until) ? 204 : 404).end();

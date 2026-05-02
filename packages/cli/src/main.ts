@@ -43,27 +43,29 @@ async function main(): Promise<number | null> {
     }
     case 'trust': {
       const sid = pickFlag(rest, '--session') ?? process.env['SESSHIN_SESSION_ID'];
-      const rule = rest.find((a) => !a.startsWith('--') && a !== sid);
+      const positional = stripFlagPair(rest, '--session').filter((a) => !a.startsWith('--'));
+      const rule = positional[0];
       if (!sid || !rule) { process.stderr.write('usage: sesshin trust <ruleString> [--session <id>]\n'); return 2; }
       return runTrust({ sessionId: sid, ruleString: rule });
     }
     case 'gate': {
       const sid = pickFlag(rest, '--session') ?? process.env['SESSHIN_SESSION_ID'];
-      const policy = rest.find((a) => !a.startsWith('--') && a !== sid);
+      const positional = stripFlagPair(rest, '--session').filter((a) => !a.startsWith('--'));
+      const policy = positional[0];
       if (!sid || !policy) { process.stderr.write('usage: sesshin gate <disabled|auto|always> [--session <id>]\n'); return 2; }
       return runGate({ sessionId: sid, policy });
     }
     case 'pin': {
       const sid = pickFlag(rest, '--session') ?? process.env['SESSHIN_SESSION_ID'];
       if (!sid) { process.stderr.write('usage: sesshin pin [<message>] [--session <id>]  (no message clears the pin)\n'); return 2; }
-      const positional = rest.filter((a) => !a.startsWith('--') && a !== sid);
+      const positional = stripFlagPair(rest, '--session').filter((a) => !a.startsWith('--'));
       const msg = positional.length > 0 ? positional.join(' ') : null;
       return runPin({ sessionId: sid, message: msg });
     }
     case 'quiet': {
       const sid = pickFlag(rest, '--session') ?? process.env['SESSHIN_SESSION_ID'];
       if (!sid) { process.stderr.write("usage: sesshin quiet [<duration>|off] [--session <id>]  (e.g. 5m, 30s, 1h)\n"); return 2; }
-      const positional = rest.filter((a) => !a.startsWith('--') && a !== sid);
+      const positional = stripFlagPair(rest, '--session').filter((a) => !a.startsWith('--'));
       const dur = positional[0] ?? null;
       return runQuiet({ sessionId: sid, duration: dur });
     }
@@ -77,6 +79,11 @@ function pickFlag(args: readonly string[], name: string): string | undefined {
   const i = args.indexOf(name);
   if (i === -1) return undefined;
   return args[i + 1];
+}
+
+function stripFlagPair(args: readonly string[], name: string): string[] {
+  const i = args.indexOf(name);
+  return i === -1 ? [...args] : [...args.slice(0, i), ...args.slice(i + 2)];
 }
 
 main().then((code) => { if (code !== null) process.exit(code); }).catch((e) => {
