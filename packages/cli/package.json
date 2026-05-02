@@ -1,0 +1,21 @@
+{
+  "name": "@sesshin/cli",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "bin": { "sesshin": "bin/sesshin" },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@sesshin/shared": "workspace:*",
+    "@sesshin/hub": "workspace:*",
+    "@sesshin/hook-handler": "workspace:*",
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": { "@types/node": "^22.0.0", "@types/ws": "^8.5.0", "tsup": "^8.3.0", "vitest": "^2.1.0" }
+}
