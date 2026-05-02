@@ -9,6 +9,8 @@
  * mode where it normally would not. So when we don't want to gate, the
  * hub must respond with HTTP 204 (no decision) — *not* 200 with "ask".
  */
+import type { PermissionMode } from '@sesshin/shared';
+
 export type ApprovalGatePolicy = 'disabled' | 'auto' | 'always';
 
 // Modes where claude auto-executes without prompting. We must never gate
@@ -29,12 +31,15 @@ export function parsePolicy(raw: string | undefined): ApprovalGatePolicy {
 
 export function shouldGatePreToolUse(
   raw: Record<string, unknown>,
+  knownMode: PermissionMode | null,
   policy: ApprovalGatePolicy,
 ): boolean {
   if (policy === 'disabled') return false;
   if (policy === 'always')   return true;
   // policy === 'auto'
-  const mode = typeof raw['permission_mode'] === 'string' ? raw['permission_mode'] : 'default';
+  const mode: string =
+    knownMode ??
+    (typeof raw['permission_mode'] === 'string' ? raw['permission_mode'] : 'default');
   if (AUTO_EXECUTE_MODES.has(mode)) return false;
   if (mode === 'plan')              return false;
   const tool = typeof raw['tool_name'] === 'string' ? raw['tool_name'] : '';

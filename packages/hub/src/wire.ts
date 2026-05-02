@@ -134,7 +134,9 @@ export async function startHub(): Promise<HubInstance> {
       // null so the REST layer responds 204 and the hook handler stays
       // silent. Claude then follows its normal mode logic and the user
       // sees no extra prompts.
-      if (!shouldGatePreToolUse(env.raw, approvalGate)) return null;
+      const session = registry.get(env.sessionId);
+      const knownMode = session?.substate.permissionMode ?? null;
+      if (!shouldGatePreToolUse(env.raw, knownMode, approvalGate)) return null;
       const tool = typeof env.raw['tool_name'] === 'string' ? env.raw['tool_name'] : 'unknown';
       const toolInput = env.raw['tool_input'] ?? null;
       const toolUseId = typeof env.raw['tool_use_id'] === 'string' ? env.raw['tool_use_id'] : undefined;
