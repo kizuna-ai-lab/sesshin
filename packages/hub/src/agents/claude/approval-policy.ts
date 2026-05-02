@@ -40,6 +40,14 @@ export function shouldGatePreToolUse(
   knownMode: PermissionMode | undefined,
   policy: ApprovalGatePolicy,
   allow: AllowContext = { sessionAllowList: [], claudeAllowRules: [] },
+  /**
+   * Whether ≥1 client currently subscribed to this session has the `actions`
+   * capability. When false the hub MUST stay transparent: there's no one to
+   * answer the prompt-request, so blocking would just stall claude until the
+   * approval timeout fires. Defaults to `true` so existing tests keep their
+   * current contract.
+   */
+  hasSubscribedClient: boolean = true,
 ): boolean {
   if (policy === 'disabled') return false;
   if (policy === 'always')   return true;
@@ -49,6 +57,7 @@ export function shouldGatePreToolUse(
     (typeof raw['permission_mode'] === 'string' ? raw['permission_mode'] : 'default');
   if (AUTO_EXECUTE_MODES.has(mode)) return false;
   if (mode === 'plan')              return false;
+  if (!hasSubscribedClient)         return false;
   const tool = typeof raw['tool_name'] === 'string' ? raw['tool_name'] : '';
   const rawInput = raw['tool_input'];
   const toolInput: Record<string, unknown> =

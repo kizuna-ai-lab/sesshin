@@ -78,6 +78,24 @@ describe('shouldGatePreToolUse — auto policy', () => {
       { sessionAllowList: [], claudeAllowRules: ['Bash(npm install)'] },
     )).toBe(false);
   });
+
+  it('does NOT gate when no client subscribed even if everything else is gated', () => {
+    expect(shouldGatePreToolUse(
+      { permission_mode: 'default', tool_name: 'Bash' },
+      'default', 'auto',
+      { sessionAllowList: [], claudeAllowRules: [] },
+      /* hasSubscribedClient */ false,
+    )).toBe(false);
+  });
+
+  it('still gates when hasSubscribedClient is true (explicit)', () => {
+    expect(shouldGatePreToolUse(
+      { permission_mode: 'default', tool_name: 'Bash' },
+      'default', 'auto',
+      { sessionAllowList: [], claudeAllowRules: [] },
+      /* hasSubscribedClient */ true,
+    )).toBe(true);
+  });
 });
 
 describe('shouldGatePreToolUse — disabled policy', () => {

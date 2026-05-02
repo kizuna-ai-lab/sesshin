@@ -61,6 +61,16 @@ describe('ApprovalManager', () => {
     expect(seen).toEqual([]);
   });
 
+  it('cancelOnLastClientGone resolves all pending for a session as ask', async () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 5000 });
+    const a = m.open({ sessionId: 's1', tool: 'Bash', toolInput: {} });
+    const b = m.open({ sessionId: 's2', tool: 'Edit', toolInput: {} });
+    expect(m.cancelOnLastClientGone('s1')).toBe(1);
+    await expect(a.decision).resolves.toMatchObject({ decision: 'ask' });
+    expect(m.pendingForSession('s2')).toHaveLength(1);
+    m.decide(b.request.requestId, { decision: 'allow' });
+  });
+
   it('honors a custom timeoutDecision', async () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 30, timeoutDecision: 'deny', timeoutReason: 'no client' });
     const { decision } = m.open({ sessionId: 's1', tool: 'T', toolInput: {} });

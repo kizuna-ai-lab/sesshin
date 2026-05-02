@@ -101,6 +101,16 @@ export class ApprovalManager {
     return cancelled;
   }
 
+  /**
+   * Cancel all pending requests for a session because the last subscribed
+   * `actions`-capable client just disconnected. Mechanically identical to
+   * {@link cancelForSession} (resolves with `decision: 'ask'`), but tags the
+   * reason so logs / clients can distinguish from session-end cancellation.
+   */
+  cancelOnLastClientGone(sessionId: string): number {
+    return this.cancelForSession(sessionId, 'sesshin: last subscribed client disconnected');
+  }
+
   pendingCount(): number { return this.pending.size; }
   pendingForSession(sessionId: string): PendingApproval[] {
     const out: PendingApproval[] = [];

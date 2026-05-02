@@ -147,10 +147,15 @@ export async function startHub(): Promise<HubInstance> {
       // sees no extra prompts.
       const session = registry.get(env.sessionId);
       const knownMode = session?.substate.permissionMode;
+      // hasSubscribedClient: stay transparent when no actions-capable client
+      // is currently subscribed to this session. Hook handler returns 204 →
+      // claude follows its native permission logic instead of waiting on a
+      // ghost remote.
+      const hasSubscribedClient = wsRef?.hasSubscribedActionsClient(env.sessionId) ?? false;
       if (!shouldGatePreToolUse(env.raw, knownMode, approvalGate, {
         sessionAllowList: session?.sessionAllowList ?? [],
         claudeAllowRules: session?.claudeAllowRules ?? [],
-      })) return null;
+      }, hasSubscribedClient)) return null;
       const tool = typeof env.raw['tool_name'] === 'string' ? env.raw['tool_name'] : 'unknown';
       const rawInput = env.raw['tool_input'];
       const toolInput: Record<string, unknown> =
@@ -215,6 +220,28 @@ export async function startHub(): Promise<HubInstance> {
     onInput: async (sessionId, data, source) => {
       const r = await bridge.deliver(sessionId, data, source);
       return { ok: r.ok, ...(r.reason !== undefined ? { reason: r.reason } : {}) };
+    },
+    onLastActionsClientGone: (sessionId) => {
+      // The last actions-capable client just unsubscribed/disconnected. Any
+      // pending PreToolUse approval for this session is now waiting on a
+      // ghost. Resolve them as 'ask' immediately so claude's TUI prompt
+      // takes over instead of timing out 60s later.
+      const pending = approvals.pendingForSession(sessionId);
+      if (pending.length === 0) return;
+      // Clean up per-request maps + broadcast resolution BEFORE calling
+      // cancelOnLastClientGone (cancellation removes pending entries, so we
+      // need to capture them first — same pattern as the session-removed
+      // handler below).
+      for (const a of pending) {
+        pendingHandlers.delete(a.requestId);
+        pendingUpdatedInput.delete(a.requestId);
+        wsRef?.broadcast({
+          type: 'session.prompt-request.resolved',
+          sessionId, requestId: a.requestId, reason: 'cancelled-no-clients',
+        });
+      }
+      approvals.cancelOnLastClientGone(sessionId);
+      log.info({ sessionId, cancelled: pending.length }, 'released pending approvals: last actions-client gone');
     },
     onPromptResponse: (sessionId, requestId, answers) => {
       const slot = pendingHandlers.get(requestId);

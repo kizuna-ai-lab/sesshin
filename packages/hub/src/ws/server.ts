@@ -21,6 +21,13 @@ export interface WsServerDeps {
    * found (false → stale or already resolved by another client/timeout).
    */
   onPromptResponse?: (sessionId: string, requestId: string, answers: import('@sesshin/shared').PromptResponse['answers']) => boolean;
+  /**
+   * Called when the last `actions`-capable client subscribed to `sessionId`
+   * disconnects (or unsubscribes). Sesshin uses this to release any pending
+   * approval long-polls back to claude's TUI so the laptop doesn't sit
+   * blocked on an absent remote.
+   */
+  onLastActionsClientGone?: (sessionId: string) => void;
 }
 
 export interface WsServerInstance {
@@ -28,6 +35,8 @@ export interface WsServerInstance {
   close(): Promise<void>;
   address(): AddressInfo;
   broadcast(msg: object, filter?: (clientCaps: string[]) => boolean): void;
+  /** True iff ≥1 connected client has the `actions` capability AND is currently subscribed to this session. */
+  hasSubscribedActionsClient(sessionId: string): boolean;
 }
 
 const MIME: Record<string, string> = {
@@ -60,6 +69,17 @@ export function createWsServer(deps: WsServerDeps): WsServerInstance {
   const wss = new WebSocketServer({ noServer: true });
   const sockets = new Set<WebSocket>();
   const targets = new Map<WebSocket, BroadcastTarget>();
+  // Counter map: sessionId → number of currently-connected `actions`-capable
+  // clients subscribed to that session. Maintained by `bumpActions` below
+  // (called from connection.ts on subscribe/unsubscribe/close events).
+  const actionsBySession = new Map<string, number>();
+  function bumpActions(sessionId: string, delta: 1 | -1): void {
+    const cur = actionsBySession.get(sessionId) ?? 0;
+    const next = cur + delta;
+    if (next <= 0) actionsBySession.delete(sessionId);
+    else actionsBySession.set(sessionId, next);
+    if (delta === -1 && next <= 0) deps.onLastActionsClientGone?.(sessionId);
+  }
 
   http.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://x');
@@ -71,7 +91,7 @@ export function createWsServer(deps: WsServerDeps): WsServerInstance {
     wss.handleUpgrade(req, socket, head, (ws) => {
       sockets.add(ws);
       ws.on('close', () => { sockets.delete(ws); targets.delete(ws); });
-      handleConnection(ws, deps, (target) => targets.set(ws, target));
+      handleConnection(ws, deps, (target) => targets.set(ws, target), bumpActions);
     });
   });
 
@@ -96,6 +116,7 @@ export function createWsServer(deps: WsServerDeps): WsServerInstance {
         ws.send(data);
       }
     },
+    hasSubscribedActionsClient: (sid) => (actionsBySession.get(sid) ?? 0) > 0,
   };
 }
 

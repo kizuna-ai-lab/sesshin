@@ -22,6 +22,7 @@ export function handleConnection(
   ws: WebSocket,
   deps: WsServerDeps,
   registerTarget: (target: BroadcastTarget) => void,
+  bumpActions: (sessionId: string, delta: 1 | -1) => void,
 ): void {
   const state: ConnectionState = { ws, kind: null, capabilities: new Set(), subscribedTo: new Set() };
   let identified = false;
@@ -30,6 +31,16 @@ export function handleConnection(
   }, 5000);
 
   ws.on('close', () => clearTimeout(identifyTimeout));
+  // On socket close, decrement the per-session actions counter for whatever
+  // we were subscribed to (so the hub releases pending approvals waiting on
+  // a now-departed client). Only relevant when this client had `actions` cap.
+  ws.on('close', () => {
+    if (!state.capabilities.has('actions')) return;
+    const cur = state.subscribedTo === 'all'
+      ? deps.registry.list().map((s) => s.id)
+      : Array.from(state.subscribedTo);
+    for (const id of cur) bumpActions(id, -1);
+  });
   ws.on('message', (raw) => {
     let parsed: unknown;
     try { parsed = JSON.parse(raw.toString()); }
@@ -62,7 +73,7 @@ export function handleConnection(
       ws.close();
       return;
     }
-    handleUpstream(state, upstream.data, deps);
+    handleUpstream(state, upstream.data, deps, bumpActions);
   });
 }
 
@@ -105,8 +116,28 @@ function isSubscribed(state: ConnectionState, sessionId: string): boolean {
   return state.subscribedTo.has(sessionId);
 }
 
-function handleUpstream(state: ConnectionState, msg: any, deps: WsServerDeps): void {
+function handleUpstream(
+  state: ConnectionState,
+  msg: any,
+  deps: WsServerDeps,
+  bumpActions: (sessionId: string, delta: 1 | -1) => void,
+): void {
   if (msg.type === 'subscribe') {
+    // Diff prev vs next subscription set, bumping the per-session
+    // actions-counter only for clients that have the `actions` capability.
+    // This is what powers `hasSubscribedActionsClient` and lets the hub know
+    // when the last subscribed client just left a session.
+    const hasActions = state.capabilities.has('actions');
+    const next = msg.sessions === 'all'
+      ? new Set(deps.registry.list().map((s) => s.id))
+      : new Set<string>(msg.sessions);
+    if (hasActions) {
+      const prev = state.subscribedTo === 'all'
+        ? new Set(deps.registry.list().map((s) => s.id))
+        : state.subscribedTo;
+      for (const id of next) if (!prev.has(id)) bumpActions(id, 1);
+      for (const id of prev) if (!next.has(id)) bumpActions(id, -1);
+    }
     state.subscribedTo = msg.sessions === 'all' ? 'all' : new Set(msg.sessions);
     if (state.capabilities.has('state')) {
       state.ws.send(JSON.stringify({ type: 'session.list', sessions: deps.registry.list() }));
@@ -122,8 +153,28 @@ function handleUpstream(state: ConnectionState, msg: any, deps: WsServerDeps): v
     return;
   }
   if (msg.type === 'unsubscribe') {
-    if (state.subscribedTo === 'all') state.subscribedTo = new Set();
-    else for (const id of msg.sessions) state.subscribedTo.delete(id);
+    const hasActions = state.capabilities.has('actions');
+    if (state.subscribedTo === 'all') {
+      // Was subscribed to everything; now drop the explicit sessions. For
+      // an `actions` client this means decrementing every session NOT in
+      // the unsubscribe list (because everything else stays subscribed).
+      // Practically clients use 'all' rarely so we just snapshot now.
+      const all = new Set(deps.registry.list().map((s) => s.id));
+      const drop = new Set<string>(msg.sessions);
+      const remaining = new Set<string>();
+      for (const id of all) if (!drop.has(id)) remaining.add(id);
+      if (hasActions) {
+        for (const id of all) if (!remaining.has(id)) bumpActions(id, -1);
+      }
+      state.subscribedTo = remaining;
+    } else {
+      for (const id of msg.sessions) {
+        if (state.subscribedTo.has(id)) {
+          state.subscribedTo.delete(id);
+          if (hasActions) bumpActions(id, -1);
+        }
+      }
+    }
     return;
   }
   if (msg.type === 'prompt-response') {
