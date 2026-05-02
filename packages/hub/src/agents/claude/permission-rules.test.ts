@@ -31,6 +31,27 @@ describe('formatRuleString', () => {
   });
 });
 
+describe('escape round-trip', () => {
+  it('round-trips empty content', () => {
+    expect(parseRuleString(formatRuleString('Bash', ''))).toEqual({ toolName: 'Bash', ruleContent: '' });
+  });
+
+  it('round-trips string of only backslashes', () => {
+    const s = '\\\\';   // two backslashes
+    expect(parseRuleString(formatRuleString('Bash', s))).toEqual({ toolName: 'Bash', ruleContent: s });
+  });
+
+  it('round-trips backslash-paren sequence', () => {
+    const s = '\\(';   // backslash + open-paren
+    expect(parseRuleString(formatRuleString('Bash', s))).toEqual({ toolName: 'Bash', ruleContent: s });
+  });
+
+  it('round-trips paren-backslash-paren combination', () => {
+    const s = '(a\\b)';   // tricky: parens around content with embedded backslash
+    expect(parseRuleString(formatRuleString('Bash', s))).toEqual({ toolName: 'Bash', ruleContent: s });
+  });
+});
+
 describe('matchRule — Bash', () => {
   it('bare Bash matches all calls', () => {
     expect(matchRule('Bash', { command: 'rm -rf /' }, parseRuleString('Bash')!)).toBe(true);

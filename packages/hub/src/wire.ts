@@ -152,7 +152,11 @@ export async function startHub(): Promise<HubInstance> {
         claudeAllowRules: session?.claudeAllowRules ?? [],
       })) return null;
       const tool = typeof env.raw['tool_name'] === 'string' ? env.raw['tool_name'] : 'unknown';
-      const toolInput = (env.raw['tool_input'] as Record<string, unknown>) ?? {};
+      const rawInput = env.raw['tool_input'];
+      const toolInput: Record<string, unknown> =
+        rawInput !== null && typeof rawInput === 'object'
+          ? (rawInput as Record<string, unknown>)
+          : {};
       const toolUseId = typeof env.raw['tool_use_id'] === 'string' ? env.raw['tool_use_id'] : undefined;
 
       setCatchAllToolName(tool);

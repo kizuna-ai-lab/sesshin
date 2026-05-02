@@ -75,7 +75,16 @@ export function matchRule(
       return url === c;
     }
     default: {
-      // Catch-all: exact-string match on JSON.stringify(input)
+      // Catch-all for tools we don't have specific matchers for.
+      //
+      // Limitation: JSON.stringify key order follows insertion order, so a
+      // hand-written rule must match the exact key order claude emits. This
+      // mirrors claude's upstream behavior — sesshin doesn't try to canonicalize
+      // because doing so would diverge from claude's own matching semantics.
+      // Practical recommendation: for custom tools, prefer the bare-toolname
+      // form (e.g., `mcp__server__doStuff`) which matches all calls, or rely on
+      // the sessionAllowList populated by handler `sessionAllowAdd` (which uses
+      // JSON.stringify on the same input shape, so the round-trip is consistent).
       return JSON.stringify(toolInput) === rule.ruleContent;
     }
   }

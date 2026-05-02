@@ -50,7 +50,11 @@ export function shouldGatePreToolUse(
   if (AUTO_EXECUTE_MODES.has(mode)) return false;
   if (mode === 'plan')              return false;
   const tool = typeof raw['tool_name'] === 'string' ? raw['tool_name'] : '';
-  const toolInput = (raw['tool_input'] as Record<string, unknown>) ?? {};
+  const rawInput = raw['tool_input'];
+  const toolInput: Record<string, unknown> =
+    rawInput !== null && typeof rawInput === 'object'
+      ? (rawInput as Record<string, unknown>)
+      : {};
   if (ruleMatchesAny(tool, toolInput, allow.sessionAllowList)) return false;
   if (ruleMatchesAny(tool, toolInput, allow.claudeAllowRules))  return false;
   return GATED_TOOLS.has(tool);
