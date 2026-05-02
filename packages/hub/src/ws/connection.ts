@@ -2,6 +2,8 @@ import type { WebSocket } from 'ws';
 import type { WsServerDeps } from './server.js';
 import { ClientIdentifySchema, UpstreamMessageSchema, PROTOCOL_VERSION } from '@sesshin/shared';
 import { hostname } from 'node:os';
+import { canAcceptInput } from '../input-arbiter.js';
+import { actionToInput } from '../agents/claude/action-map.js';
 
 export interface ConnectionState {
   ws: WebSocket;
@@ -124,5 +126,26 @@ function handleUpstream(state: ConnectionState, msg: any, deps: WsServerDeps): v
     else for (const id of msg.sessions) state.subscribedTo.delete(id);
     return;
   }
-  // input.action / input.text — T38.
+  if (msg.type === 'input.action' || msg.type === 'input.text') {
+    const session = deps.registry.get(msg.sessionId);
+    if (!session) {
+      state.ws.send(JSON.stringify({ type: 'server.error', code: 'input-rejected', message: 'session-offline' }));
+      return;
+    }
+    const source = `remote-adapter:${state.kind ?? 'unknown'}` as const;
+    const decision = canAcceptInput(session.state, source);
+    if (!decision.ok) {
+      state.ws.send(JSON.stringify({ type: 'server.error', code: 'input-rejected', message: decision.reason }));
+      return;
+    }
+    let data: string | null = null;
+    if (msg.type === 'input.text') data = msg.text;
+    else if (session.agent === 'claude-code') data = actionToInput(msg.action);
+    if (!data) {
+      state.ws.send(JSON.stringify({ type: 'server.error', code: 'unsupported-action' }));
+      return;
+    }
+    deps.onInput?.(msg.sessionId, data, source).catch(() => {});
+    return;
+  }
 }

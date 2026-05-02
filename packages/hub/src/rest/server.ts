@@ -10,6 +10,8 @@ export interface RestServerDeps {
   onHookEvent?: (envelope: { agent: string; sessionId: string; ts: number; event: string; raw: Record<string, unknown> }) => void;
   /** PtyTap for raw byte ingest (T30/M4). */
   tap?: PtyTap;
+  /** Called when the hub itself wants to push input back into the CLI. Wired in T39. */
+  onInjectFromHub?: (sessionId: string, data: string, source: string) => Promise<boolean>;
 }
 
 export interface RestServer {
@@ -26,6 +28,8 @@ const RegisterBody = z.object({
   pid:             z.number().int(),
   sessionFilePath: z.string(),
 });
+
+const InjectBody = z.object({ data: z.string(), source: z.string() });
 
 const HookBody = z.object({
   agent:     z.enum(['claude-code','codex','gemini','other']),
@@ -74,6 +78,18 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     for await (const c of req) chunks.push(c as Buffer);
     deps.tap.append(id, Buffer.concat(chunks));
     return void res.writeHead(204).end();
+  }
+  const inj = url.pathname.match(/^\/api\/sessions\/([^/]+)\/inject$/);
+  if (inj) {
+    const id = inj[1]!;
+    if (method !== 'POST') return void res.writeHead(405).end();
+    if (!deps.registry.get(id)) return void res.writeHead(404).end();
+    let body: unknown;
+    try { body = await readJson(req); } catch { return void res.writeHead(400).end(); }
+    const parsed = InjectBody.safeParse(body);
+    if (!parsed.success) return void res.writeHead(400).end();
+    const ok = await deps.onInjectFromHub?.(id, parsed.data.data, parsed.data.source);
+    return void res.writeHead(ok ? 204 : 502).end();
   }
   const hb = url.pathname.match(/^\/api\/sessions\/([^/]+)\/heartbeat$/);
   if (hb) {
