@@ -110,7 +110,7 @@ export async function startHub(): Promise<HubInstance> {
 
   // Remote approval flow (Path B): when a PreToolUse hook arrives we hold
   // the hook handler's HTTP response until either a client posts a
-  // confirmation.decision over WS, or our internal timeout falls back to
+  // prompt-response over WS, or our internal timeout falls back to
   // "ask" so claude's TUI prompt takes over on the laptop.
   const approvals = new ApprovalManager({
     defaultTimeoutMs: Number(process.env['SESSHIN_APPROVAL_TIMEOUT_MS'] ?? 60_000),
@@ -145,20 +145,33 @@ export async function startHub(): Promise<HubInstance> {
         ...(toolUseId !== undefined ? { toolUseId } : {}),
         onExpire: (a) => {
           wsRef?.broadcast({
-            type: 'session.confirmation.resolved',
-            sessionId: a.sessionId, requestId: a.requestId,
-            decision: 'ask', reason: 'sesshin: approval timed out',
+            type: 'session.prompt-request.resolved',
+            sessionId: a.sessionId, requestId: a.requestId, reason: 'timeout',
           });
         },
       });
       registry.updateState(env.sessionId, 'awaiting-confirmation');
+      const synthQuestions = [{
+        prompt: `Run ${tool}?`,
+        header: tool.slice(0, 12),
+        multiSelect: false,
+        allowFreeText: false,
+        options: [
+          { key: 'allow', label: 'Yes' },
+          { key: 'deny',  label: 'No' },
+          { key: 'ask',   label: 'Ask on laptop' },
+        ],
+      }];
       wsRef?.broadcast({
-        type: 'session.confirmation',
+        type: 'session.prompt-request',
         sessionId: env.sessionId,
         requestId: request.requestId,
-        tool, toolInput,
+        origin: 'permission',
+        toolName: tool,
         ...(toolUseId !== undefined ? { toolUseId } : {}),
         expiresAt: request.expiresAt,
+        body: '```json\n' + JSON.stringify(toolInput, null, 2) + '\n```',
+        questions: synthQuestions,
       });
       const out = await decision;
       // Whichever path ended the approval, restore the session to running so
@@ -180,13 +193,17 @@ export async function startHub(): Promise<HubInstance> {
       const r = await bridge.deliver(sessionId, data, source);
       return { ok: r.ok, ...(r.reason !== undefined ? { reason: r.reason } : {}) };
     },
-    onConfirmationDecision: (sessionId, requestId, decision, reason) => {
+    onPromptResponse: (sessionId, requestId, answers) => {
+      const key = answers[0]?.selectedKeys[0];
+      let decision: 'allow' | 'deny' | 'ask' = 'ask';
+      if (key === 'allow') decision = 'allow';
+      else if (key === 'deny') decision = 'deny';
+      const reason = answers[0]?.freeText;
       const ok = approvals.decide(requestId, { decision, ...(reason !== undefined ? { reason } : {}) });
       if (ok) {
         ws.broadcast({
-          type: 'session.confirmation.resolved',
-          sessionId, requestId, decision,
-          ...(reason !== undefined ? { reason } : {}),
+          type: 'session.prompt-request.resolved',
+          sessionId, requestId, reason: 'decided',
         });
       }
       return ok;
@@ -198,7 +215,15 @@ export async function startHub(): Promise<HubInstance> {
 
   // When a session disappears, unblock any pending hook handlers waiting on
   // approval — otherwise they'd sit until their internal timeout.
-  registry.on('session-removed', (id) => { approvals.cancelForSession(id); });
+  registry.on('session-removed', (id) => {
+    for (const a of approvals.pendingForSession(id)) {
+      wsRef?.broadcast({
+        type: 'session.prompt-request.resolved',
+        sessionId: id, requestId: a.requestId, reason: 'session-ended',
+      });
+    }
+    approvals.cancelForSession(id);
+  });
 
   // Broadcast PTY raw output to WS clients with the `raw` capability.
   const rawSubscriptions = new Map<string, () => void>();

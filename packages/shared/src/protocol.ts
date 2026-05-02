@@ -42,22 +42,43 @@ export const ClientPongSchema = z.object({
   type:  z.literal('client.pong'),
   nonce: z.string(),
 });
-// Sent by a client in response to a server.confirmation. Carries the user's
-// permission decision for a PreToolUse approval that the hub is holding open
-// (the originating hook handler is blocked waiting for this answer).
-export const ConfirmationDecisionEnum = z.enum(['allow','deny','ask']);
-export const ConfirmationDecisionSchema = z.object({
-  type:      z.literal('confirmation.decision'),
-  sessionId: z.string(),
-  requestId: z.string(),
-  decision:  ConfirmationDecisionEnum,
-  reason:    z.string().optional(),
+
+// ---- Prompt request / response (PromptRequest shape, mirrors claude internal) ----
+export const PromptOptionSchema = z.object({
+  key:         z.string(),
+  label:       z.string(),
+  description: z.string().optional(),
+  preview:     z.string().optional(),
+  recommended: z.boolean().optional(),
+});
+
+export const PromptQuestionSchema = z.object({
+  prompt:        z.string(),
+  header:        z.string().optional(),
+  multiSelect:   z.boolean(),
+  allowFreeText: z.boolean(),
+  options:       z.array(PromptOptionSchema),
+});
+
+// Sent by a client in response to a session.prompt-request. Carries the
+// user's answer(s) for a pending prompt the hub is holding open (the
+// originating hook handler is blocked waiting for this response).
+export const PromptResponseSchema = z.object({
+  type:       z.literal('prompt-response'),
+  sessionId:  z.string(),
+  requestId:  z.string(),
+  answers:    z.array(z.object({
+    questionIndex:   z.number().int(),
+    selectedKeys:    z.array(z.string()),
+    freeText:        z.string().optional(),
+    notes:           z.string().optional(),
+  })),
 });
 
 export const UpstreamMessageSchema = z.discriminatedUnion('type', [
   ClientIdentifySchema, SubscribeSchema, UnsubscribeSchema,
   InputTextSchema, InputActionSchema, ClientPongSchema,
-  ConfirmationDecisionSchema,
+  PromptResponseSchema,
 ]);
 export type UpstreamMessage = z.infer<typeof UpstreamMessageSchema>;
 
@@ -118,35 +139,43 @@ export const ServerPingSchema = z.object({
   type:  z.literal('server.ping'),
   nonce: z.string(),
 });
-// Server-side announcement that the hub is holding a PreToolUse hook open
-// pending a permission decision. The hook handler will block on the hub's
-// response until either a client posts ConfirmationDecisionSchema for the
-// matching requestId, or the hub's internal timeout elapses (in which case
-// the hub falls back to "ask" so claude's TUI takes over).
-export const SessionConfirmationSchema = z.object({
-  type:       z.literal('session.confirmation'),
+// Server-side announcement that the hub is holding a hook open pending a
+// prompt response. The hook handler will block on the hub's response until
+// either a client posts PromptResponseSchema for the matching requestId,
+// or the hub's internal timeout elapses (in which case the hub falls back
+// to its origin-specific default — for permission prompts, "ask" so
+// claude's TUI takes over).
+export const SessionPromptRequestSchema = z.object({
+  type:       z.literal('session.prompt-request'),
   sessionId:  z.string(),
   requestId:  z.string(),
-  tool:       z.string(),
-  toolInput:  z.unknown(),
+  origin:     z.enum(['permission','ask-user-question','exit-plan-mode','enter-plan-mode']),
+  toolName:   z.string(),
   toolUseId:  z.string().optional(),
   expiresAt:  z.number().int(),
+  body:       z.string().optional(),
+  questions:  z.array(PromptQuestionSchema),
 });
-// Server tells clients a previously announced confirmation has been resolved
-// (by another client, by timeout, or by the originating session ending).
-// Clients use this to dismiss any pending confirmation UI for requestId.
-export const SessionConfirmationResolvedSchema = z.object({
-  type:       z.literal('session.confirmation.resolved'),
+// Server tells clients a previously announced prompt-request has been
+// resolved (by another client, by timeout, or by the originating session
+// ending). Clients use this to dismiss any pending prompt UI for requestId.
+export const SessionPromptRequestResolvedSchema = z.object({
+  type:       z.literal('session.prompt-request.resolved'),
   sessionId:  z.string(),
   requestId:  z.string(),
-  decision:   ConfirmationDecisionEnum,
-  reason:     z.string().optional(),
+  reason:     z.enum(['decided','timeout','cancelled-no-clients','session-ended']),
 });
 
 export const DownstreamMessageSchema = z.discriminatedUnion('type', [
   ServerHelloSchema, SessionListSchema, SessionAddedSchema, SessionRemovedSchema,
   SessionStateMsgSchema, SessionEventMsgSchema, SessionSummaryMsgSchema,
   SessionAttentionSchema, SessionRawSchema, ServerErrorSchema, ServerPingSchema,
-  SessionConfirmationSchema, SessionConfirmationResolvedSchema,
+  SessionPromptRequestSchema, SessionPromptRequestResolvedSchema,
 ]);
 export type DownstreamMessage = z.infer<typeof DownstreamMessageSchema>;
+
+export type SessionPromptRequest         = z.infer<typeof SessionPromptRequestSchema>;
+export type SessionPromptRequestResolved = z.infer<typeof SessionPromptRequestResolvedSchema>;
+export type PromptResponse               = z.infer<typeof PromptResponseSchema>;
+export type PromptQuestion               = z.infer<typeof PromptQuestionSchema>;
+export type PromptOption                 = z.infer<typeof PromptOptionSchema>;

@@ -2,12 +2,20 @@
 import { signal, computed } from '@preact/signals';
 import type { SessionInfo, Summary, Event } from '@sesshin/shared';
 
-export interface PendingConfirmation {
+export interface PendingPromptRequest {
   sessionId: string;
   requestId: string;
-  tool: string;
-  toolInput: unknown;
+  origin: 'permission' | 'ask-user-question' | 'exit-plan-mode' | 'enter-plan-mode';
+  toolName: string;
   toolUseId?: string;
+  body?: string;
+  questions: Array<{
+    prompt: string;
+    header?: string;
+    multiSelect: boolean;
+    allowFreeText: boolean;
+    options: Array<{ key: string; label: string; description?: string; preview?: string; recommended?: boolean }>;
+  }>;
   expiresAt: number;
 }
 
@@ -16,7 +24,7 @@ export const selectedSessionId = signal<string | null>(null);
 export const summariesBySession = signal<Record<string, Summary[]>>({});
 export const eventsBySession = signal<Record<string, Event[]>>({});
 export const rawBySession = signal<Record<string, string>>({});
-export const confirmationsBySession = signal<Record<string, PendingConfirmation[]>>({});
+export const promptRequestsBySession = signal<Record<string, PendingPromptRequest[]>>({});
 export const connected = signal<boolean>(false);
 export const lastEventId = signal<string | null>(null);
 
@@ -48,14 +56,14 @@ export function appendRaw(sessionId: string, data: string): void {
   rawBySession.value = { ...rawBySession.value, [sessionId]: next };
 }
 
-export function addConfirmation(c: PendingConfirmation): void {
-  const cur = confirmationsBySession.value[c.sessionId] ?? [];
+export function addPromptRequest(c: PendingPromptRequest): void {
+  const cur = promptRequestsBySession.value[c.sessionId] ?? [];
   if (cur.some((x) => x.requestId === c.requestId)) return;
-  confirmationsBySession.value = { ...confirmationsBySession.value, [c.sessionId]: [...cur, c] };
+  promptRequestsBySession.value = { ...promptRequestsBySession.value, [c.sessionId]: [...cur, c] };
 }
-export function removeConfirmation(sessionId: string, requestId: string): void {
-  const cur = confirmationsBySession.value[sessionId] ?? [];
+export function removePromptRequest(sessionId: string, requestId: string): void {
+  const cur = promptRequestsBySession.value[sessionId] ?? [];
   const next = cur.filter((x) => x.requestId !== requestId);
   if (next.length === cur.length) return;
-  confirmationsBySession.value = { ...confirmationsBySession.value, [sessionId]: next };
+  promptRequestsBySession.value = { ...promptRequestsBySession.value, [sessionId]: next };
 }

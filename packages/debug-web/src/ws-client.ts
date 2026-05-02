@@ -2,14 +2,21 @@
 import {
   connected, sessions, upsertSession, removeSession,
   addSummary, addEvent, appendRaw, lastEventId,
-  addConfirmation, removeConfirmation,
+  addPromptRequest, removePromptRequest,
 } from './store.js';
 import type { Action } from '@sesshin/shared';
+
+export interface PromptResponseAnswer {
+  questionIndex: number;
+  selectedKeys: string[];
+  freeText?: string;
+  notes?: string;
+}
 
 export interface WsClient {
   sendAction(sessionId: string, action: Action): void;
   sendText(sessionId: string, text: string): void;
-  sendConfirmation(sessionId: string, requestId: string, decision: 'allow' | 'deny' | 'ask', reason?: string): void;
+  sendPromptResponse(sessionId: string, requestId: string, answers: PromptResponseAnswer[]): void;
   close(): void;
 }
 
@@ -38,12 +45,8 @@ export function connect(): WsClient {
   return {
     sendAction(sessionId, action) { ws?.send(JSON.stringify({ type: 'input.action', sessionId, action })); },
     sendText(sessionId, text)     { ws?.send(JSON.stringify({ type: 'input.text', sessionId, text })); },
-    sendConfirmation(sessionId, requestId, decision, reason) {
-      ws?.send(JSON.stringify({
-        type: 'confirmation.decision',
-        sessionId, requestId, decision,
-        ...(reason !== undefined ? { reason } : {}),
-      }));
+    sendPromptResponse(sessionId, requestId, answers) {
+      ws?.send(JSON.stringify({ type: 'prompt-response', sessionId, requestId, answers }));
     },
     close() { ws?.close(); },
   };
@@ -64,11 +67,14 @@ function handleFrame(m: any): void {
     case 'session.summary': addSummary(m); return;
     case 'session.event':   addEvent(m); return;
     case 'session.raw':     appendRaw(m.sessionId, m.data); return;
-    case 'session.confirmation':          addConfirmation({
-      sessionId: m.sessionId, requestId: m.requestId, tool: m.tool,
-      toolInput: m.toolInput, toolUseId: m.toolUseId, expiresAt: m.expiresAt,
-    }); return;
-    case 'session.confirmation.resolved': removeConfirmation(m.sessionId, m.requestId); return;
+    case 'session.prompt-request':
+      addPromptRequest({
+        sessionId: m.sessionId, requestId: m.requestId,
+        origin: m.origin, toolName: m.toolName, toolUseId: m.toolUseId,
+        body: m.body, questions: m.questions, expiresAt: m.expiresAt,
+      }); return;
+    case 'session.prompt-request.resolved':
+      removePromptRequest(m.sessionId, m.requestId); return;
     // attention is accepted but not rendered yet (T64).
   }
 }

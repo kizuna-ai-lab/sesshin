@@ -126,9 +126,9 @@ function handleUpstream(state: ConnectionState, msg: any, deps: WsServerDeps): v
     else for (const id of msg.sessions) state.subscribedTo.delete(id);
     return;
   }
-  if (msg.type === 'confirmation.decision') {
-    const ok = deps.onConfirmationDecision?.(msg.sessionId, msg.requestId, msg.decision, msg.reason) ?? false;
-    if (!ok) state.ws.send(JSON.stringify({ type: 'server.error', code: 'confirmation-stale', message: 'no pending approval for that requestId' }));
+  if (msg.type === 'prompt-response') {
+    const ok = deps.onPromptResponse?.(msg.sessionId, msg.requestId, msg.answers) ?? false;
+    if (!ok) state.ws.send(JSON.stringify({ type: 'server.error', code: 'prompt-stale', message: 'no pending prompt-request for that requestId' }));
     return;
   }
   if (msg.type === 'input.action' || msg.type === 'input.text') {

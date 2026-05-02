@@ -4,7 +4,7 @@ import { SummaryCard } from './SummaryCard.js';
 import { EventTimeline } from './EventTimeline.js';
 import { ActionButtons } from './ActionButtons.js';
 import { TextInput } from './TextInput.js';
-import { ConfirmationPanel } from './ConfirmationPanel.js';
+// import { ConfirmationPanel } from './ConfirmationPanel.js';   // replaced in Task 8
 import type { WsClient } from '../ws-client.js';
 
 function stripAnsi(s: string): string {
@@ -24,7 +24,7 @@ export function SessionDetail({ ws }: { ws: WsClient }) {
         <StateBadge state={s.state} />
       </div>
       <SummaryCard summary={summaries[0] ?? null} />
-      <ConfirmationPanel ws={ws} sessionId={s.id} />
+      {/* <ConfirmationPanel ws={ws} sessionId={s.id} />               // replaced in Task 8 */}
       <ActionButtons ws={ws} sessionId={s.id} />
       <TextInput ws={ws} sessionId={s.id} />
       <h3>Event timeline</h3>
