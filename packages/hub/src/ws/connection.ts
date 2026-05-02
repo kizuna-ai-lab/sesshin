@@ -16,6 +16,10 @@ export interface BroadcastTarget {
   ws: WebSocket;
   caps(): Set<string>;
   subscribed(sessionId: string): boolean;
+  /** Client kind reported in `client.identify` (for diagnostics listClients). */
+  kindValue(): string;
+  /** Raw subscription set: 'all' or a Set of session ids (for diagnostics listClients). */
+  subscribedToValue(): Set<string> | 'all';
 }
 
 export function handleConnection(
@@ -60,6 +64,8 @@ export function handleConnection(
         ws,
         caps: () => state.capabilities,
         subscribed: (sid) => state.subscribedTo === 'all' || state.subscribedTo.has(sid),
+        kindValue: () => state.kind ?? 'unknown',
+        subscribedToValue: () => state.subscribedTo,
       });
       ws.send(JSON.stringify({
         type: 'server.hello', protocol: PROTOCOL_VERSION,

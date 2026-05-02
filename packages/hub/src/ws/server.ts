@@ -37,6 +37,11 @@ export interface WsServerInstance {
   broadcast(msg: object, filter?: (clientCaps: string[]) => boolean): void;
   /** True iff ≥1 connected client has the `actions` capability AND is currently subscribed to this session. */
   hasSubscribedActionsClient(sessionId: string): boolean;
+  /**
+   * Snapshot list of currently-connected clients. When `sessionId` is non-null,
+   * only includes clients subscribed to that session (or subscribed to 'all').
+   */
+  listClients(sessionId: string | null): import('../rest/diagnostics.js').ClientInfo[];
 }
 
 const MIME: Record<string, string> = {
@@ -117,6 +122,19 @@ export function createWsServer(deps: WsServerDeps): WsServerInstance {
       }
     },
     hasSubscribedActionsClient: (sid) => (actionsBySession.get(sid) ?? 0) > 0,
+    listClients(sessionId) {
+      const out: import('../rest/diagnostics.js').ClientInfo[] = [];
+      for (const [, t] of targets) {
+        const subscribed = t.subscribedToValue();
+        if (sessionId !== null && subscribed !== 'all' && !subscribed.has(sessionId)) continue;
+        out.push({
+          kind: t.kindValue(),
+          capabilities: Array.from(t.caps()),
+          subscribedTo: subscribed === 'all' ? 'all' : Array.from(subscribed),
+        });
+      }
+      return out;
+    },
   };
 }
 

@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { PermissionModeEnum } from '@sesshin/shared';
 import type { SessionRegistry } from '../registry/session-registry.js';
 import type { PtyTap } from '../observers/pty-tap.js';
+import type { ApprovalManager } from '../approval-manager.js';
+import type { ClientInfo, HistoryEntry } from './diagnostics.js';
 
 export interface RestServerDeps {
   registry: SessionRegistry;
@@ -33,6 +35,14 @@ export interface RestServerDeps {
     reason?: string;
     updatedInput?: Record<string, unknown>;
   } | null>;
+  /** Approval manager for diagnostics endpoint (T9). When omitted, /api/diagnostics returns 503. */
+  approvals?: ApprovalManager;
+  /** True iff there's a connected actions-capable client subscribed to this session. */
+  hasSubscribedActionsClient?: (sessionId: string) => boolean;
+  /** List currently-connected clients (filter to one session, or `null` for all). */
+  listClients?: (sessionId: string | null) => ClientInfo[];
+  /** Read recent prompt-resolution history for a session, newest-first. */
+  historyForSession?: (sessionId: string, n: number) => HistoryEntry[];
 }
 
 export interface RestServer {
@@ -154,6 +164,35 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     if (method !== 'POST') return void res.writeHead(405).end();
     return ingestHook(req, res, deps);
   }
+
+  if (url.pathname === '/api/diagnostics') {
+    if (method !== 'GET') return void res.writeHead(405).end();
+    if (!deps.approvals) return void res.writeHead(503).end();
+    const { writeDiagnostics } = await import('./diagnostics.js');
+    return writeDiagnostics(res, {
+      registry: deps.registry,
+      approvals: deps.approvals,
+      hasSubscribedActionsClient: deps.hasSubscribedActionsClient ?? (() => false),
+      listClients: deps.listClients ?? (() => []),
+      historyForSession: deps.historyForSession ?? (() => []),
+    });
+  }
+  const cm = url.pathname.match(/^\/api\/sessions\/([^/]+)\/clients$/);
+  if (cm) {
+    const id = cm[1]!;
+    if (method !== 'GET') return void res.writeHead(405).end();
+    const list = deps.listClients?.(id) ?? [];
+    return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(list));
+  }
+  const hm = url.pathname.match(/^\/api\/sessions\/([^/]+)\/history$/);
+  if (hm) {
+    const id = hm[1]!;
+    if (method !== 'GET') return void res.writeHead(405).end();
+    const n = Number(url.searchParams.get('n') ?? 20);
+    const list = deps.historyForSession?.(id, n) ?? [];
+    return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(list));
+  }
+
   res.writeHead(404).end();
 }
 

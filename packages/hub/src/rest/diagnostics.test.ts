@@ -1,0 +1,133 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { createRestServer, type RestServer } from './server.js';
+import { SessionRegistry } from '../registry/session-registry.js';
+import { ApprovalManager } from '../approval-manager.js';
+
+let svr: RestServer; let port: number;
+let registry: SessionRegistry;
+let approvals: ApprovalManager;
+
+beforeEach(async () => {
+  registry = new SessionRegistry();
+  approvals = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+  svr = createRestServer({
+    registry, approvals,
+    hasSubscribedActionsClient: () => false,
+    listClients: () => [],
+    historyForSession: () => [],
+  });
+  await svr.listen(0, '127.0.0.1');
+  port = svr.address().port;
+});
+afterEach(async () => { await svr.close(); });
+
+describe('GET /api/diagnostics', () => {
+  it('returns sessions, gate, allow lists, pending approvals', async () => {
+    registry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.sessions).toHaveLength(1);
+    expect(j.sessions[0]).toMatchObject({
+      id: 's1', state: 'starting',
+      permissionMode: 'default',
+      sessionAllowList: [], claudeAllowRules: [],
+      pendingApprovals: 0,
+    });
+  });
+
+  it('returns 503 when approvals dependency missing', async () => {
+    const localRegistry = new SessionRegistry();
+    const localSvr = createRestServer({ registry: localRegistry });
+    await localSvr.listen(0, '127.0.0.1');
+    const localPort = localSvr.address().port;
+    try {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/diagnostics`);
+      expect(r.status).toBe(503);
+    } finally {
+      await localSvr.close();
+    }
+  });
+
+  it('reflects pending approvals count', async () => {
+    registry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    approvals.open({ sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' }, timeoutMs: 60_000 });
+    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const j = await r.json();
+    expect(j.sessions[0].pendingApprovals).toBe(1);
+  });
+});
+
+describe('GET /api/sessions/:id/clients', () => {
+  it('returns the listClients result', async () => {
+    const localRegistry = new SessionRegistry();
+    const localApprovals = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    const localSvr = createRestServer({
+      registry: localRegistry,
+      approvals: localApprovals,
+      listClients: (sid) => [{ kind: 'cli-bridge', capabilities: ['actions','state'], subscribedTo: sid === 's1' ? ['s1'] : 'all' }],
+    });
+    await localSvr.listen(0, '127.0.0.1');
+    const localPort = localSvr.address().port;
+    try {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/clients`);
+      expect(r.status).toBe(200);
+      const j = await r.json();
+      expect(j).toHaveLength(1);
+      expect(j[0]).toMatchObject({ kind: 'cli-bridge', capabilities: ['actions','state'], subscribedTo: ['s1'] });
+    } finally {
+      await localSvr.close();
+    }
+  });
+
+  it('rejects non-GET with 405', async () => {
+    const r = await fetch(`http://127.0.0.1:${port}/api/sessions/s1/clients`, { method: 'POST' });
+    expect(r.status).toBe(405);
+  });
+});
+
+describe('GET /api/sessions/:id/history', () => {
+  it('returns the historyForSession result', async () => {
+    const localRegistry = new SessionRegistry();
+    const localApprovals = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    const localSvr = createRestServer({
+      registry: localRegistry,
+      approvals: localApprovals,
+      historyForSession: (sid, n) => [
+        { requestId: 'r1', tool: 'Bash', resolvedAt: 1000, decision: 'allow' },
+        { requestId: 'r2', tool: 'Read', resolvedAt: 2000, decision: 'deny', reason: 'no' },
+      ].slice(0, n).filter(() => sid === 's1'),
+    });
+    await localSvr.listen(0, '127.0.0.1');
+    const localPort = localSvr.address().port;
+    try {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/history?n=10`);
+      expect(r.status).toBe(200);
+      const j = await r.json();
+      expect(j).toHaveLength(2);
+      expect(j[0].decision).toBe('allow');
+      expect(j[1].reason).toBe('no');
+    } finally {
+      await localSvr.close();
+    }
+  });
+
+  it('defaults n to 20 when not specified', async () => {
+    let nReceived = -1;
+    const localRegistry = new SessionRegistry();
+    const localApprovals = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    const localSvr = createRestServer({
+      registry: localRegistry,
+      approvals: localApprovals,
+      historyForSession: (_sid, n) => { nReceived = n; return []; },
+    });
+    await localSvr.listen(0, '127.0.0.1');
+    const localPort = localSvr.address().port;
+    try {
+      await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/history`);
+      expect(nReceived).toBe(20);
+    } finally {
+      await localSvr.close();
+    }
+  });
+});

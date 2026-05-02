@@ -34,6 +34,23 @@ interface PendingHandlerSlot {
 const pendingHandlers = new Map<string, PendingHandlerSlot>();
 const pendingUpdatedInput = new Map<string, Record<string, unknown>>();
 
+// Per-session ring of resolved prompt-request decisions. Capped at 100 per
+// session, returned newest-first via historyStore.get(sid, n).
+const historyStore = (() => {
+  const map = new Map<string, import('./rest/diagnostics.js').HistoryEntry[]>();
+  return {
+    push(sid: string, e: import('./rest/diagnostics.js').HistoryEntry): void {
+      const arr = map.get(sid) ?? [];
+      arr.push(e);
+      if (arr.length > 100) arr.shift();
+      map.set(sid, arr);
+    },
+    get(sid: string, n: number): import('./rest/diagnostics.js').HistoryEntry[] {
+      return (map.get(sid) ?? []).slice(-n).reverse();
+    },
+  };
+})();
+
 export interface HubInstance {
   rest: RestServer;
   ws: WsServerInstance;
@@ -139,6 +156,14 @@ export async function startHub(): Promise<HubInstance> {
     onInjectFromHub: (id, data, source) => bridge.deliver(id, data, source).then((r) => r.ok),
     onAttachSink: (id, deliver) => { bridge.setSink(id, deliver); },
     onDetachSink: (id) => { bridge.clearSink(id); },
+    approvals,
+    // wsRef lazy: createWsServer runs after createRestServer, so these arrow
+    // closures resolve the ws instance at request-handling time, not at deps
+    // construction time. Same forward-declaration pattern used for
+    // onPreToolUseApproval below.
+    hasSubscribedActionsClient: (sid) => wsRef?.hasSubscribedActionsClient(sid) ?? false,
+    listClients: (sid) => wsRef?.listClients(sid) ?? [],
+    historyForSession: (sid, n) => historyStore.get(sid, n),
     onPreToolUseApproval: async (env) => {
       // Mode-aware gating: when claude wouldn't have prompted on its own
       // (auto / acceptEdits / bypassPermissions / read-only tool), return
@@ -289,6 +314,11 @@ export async function startHub(): Promise<HubInstance> {
         ws.broadcast({
           type: 'session.prompt-request.resolved',
           sessionId, requestId, reason: 'decided',
+        });
+        historyStore.push(sessionId, {
+          requestId, tool: slot.tool, resolvedAt: Date.now(),
+          decision: outcome.decision,
+          ...(outcome.reason ? { reason: outcome.reason } : {}),
         });
       }
       return ok;
