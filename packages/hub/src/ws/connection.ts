@@ -36,6 +36,9 @@ export function handleConnection(
   // a now-departed client). Only relevant when this client had `actions` cap.
   ws.on('close', () => {
     if (!state.capabilities.has('actions')) return;
+    // Live registry expansion (see subscribe-diff comment below): phantom decrements
+    // for sessions registered after the original 'all' subscribe are absorbed by
+    // bumpActions's cur > 0 guard.
     const cur = state.subscribedTo === 'all'
       ? deps.registry.list().map((s) => s.id)
       : Array.from(state.subscribedTo);
@@ -132,6 +135,11 @@ function handleUpstream(
       ? new Set(deps.registry.list().map((s) => s.id))
       : new Set<string>(msg.sessions);
     if (hasActions) {
+      // NB: when state.subscribedTo === 'all', prev is the LIVE registry at re-subscribe
+      // time, not the snapshot at original subscribe time. Sessions registered AFTER the
+      // 'all' subscribe will appear in prev without ever having been incremented for this
+      // client; the resulting phantom -1 decrements are absorbed by bumpActions's
+      // `cur > 0` guard. Same caveat applies to the unsubscribe 'all' branch and close.
       const prev = state.subscribedTo === 'all'
         ? new Set(deps.registry.list().map((s) => s.id))
         : state.subscribedTo;

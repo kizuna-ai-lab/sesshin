@@ -132,6 +132,60 @@ describe('WS server hasSubscribedActionsClient + onLastActionsClientGone', () =>
     }
   });
 
+  it('re-subscribing from "all" to specific list does not fire spuriously for sessions added after original subscribe', async () => {
+    // Trigger: a client subscribes 'all' (registry contains only s1 at T0). Then s2 is
+    // registered. Then the client RE-SUBSCRIBES to ['s1'] (not unsubscribe). The
+    // subscribe-diff path computes prev = live registry = {s1, s2}, next = {s1},
+    // producing a phantom bumpActions('s2', -1) for a count that was never positive.
+    // The `cur > 0` guard in bumpActions must absorb this so onLastActionsClientGone
+    // is NOT spuriously fired for s2.
+    const gone: string[] = [];
+    const registry = new SessionRegistry();
+    registry.register({ id: 's1', name: 's1', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/tmp/s1' });
+    const localSvr = createWsServer({
+      registry,
+      bus: new EventBus(),
+      tap: new PtyTap({ ringBytes: 1024 }),
+      staticDir: null,
+      onLastActionsClientGone: (sid) => gone.push(sid),
+    });
+    await localSvr.listen(0, '127.0.0.1');
+    const localPort = localSvr.address().port;
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${localPort}/v1/ws`);
+      await new Promise<void>((res, rej) => { ws.on('open', () => res()); ws.on('error', rej); });
+      ws.send(JSON.stringify({
+        type: 'client.identify', protocol: 1,
+        client: { kind: 'debug-web', version: '0.0.0', capabilities: ['actions','state'] },
+      }));
+      await new Promise<void>((res) => ws.once('message', () => res()));
+      // Subscribe 'all' — registry only has s1, so s1's count → 1.
+      ws.send(JSON.stringify({ type: 'subscribe', sessions: 'all', since: null }));
+      await new Promise<void>((res) => setTimeout(res, 50));
+      expect(localSvr.hasSubscribedActionsClient('s1')).toBe(true);
+      expect(localSvr.hasSubscribedActionsClient('s2')).toBe(false);
+      // Register s2 *after* the original 'all' subscribe — never incremented for this client.
+      registry.register({ id: 's2', name: 's2', agent: 'claude-code', cwd: '/', pid: 2, sessionFilePath: '/tmp/s2' });
+      expect(localSvr.hasSubscribedActionsClient('s2')).toBe(false);
+      // Re-subscribe to ['s1'] specifically. connection.ts subscribe-diff:
+      //   prev = live registry = {s1, s2}, next = {s1}
+      //   → bumpActions('s2', -1)  (phantom decrement; guard must absorb)
+      ws.send(JSON.stringify({ type: 'subscribe', sessions: ['s1'], since: null }));
+      await new Promise<void>((res) => setTimeout(res, 50));
+      // Assert: callback was NOT fired for s2 (s2's count was 0, never positive).
+      expect(gone).not.toContain('s2');
+      expect(gone).toEqual([]);
+      // s1 remains subscribed.
+      expect(localSvr.hasSubscribedActionsClient('s1')).toBe(true);
+      expect(localSvr.hasSubscribedActionsClient('s2')).toBe(false);
+      const closed = new Promise<void>((res) => ws.on('close', () => res()));
+      ws.close();
+      await closed;
+    } finally {
+      await localSvr.close();
+    }
+  });
+
   it('does NOT increment for clients without actions capability', async () => {
     const gone: string[] = [];
     const localSvr = createWsServer({
