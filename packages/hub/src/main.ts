@@ -1,15 +1,15 @@
+// packages/hub/src/main.ts
 import { log } from './logger.js';
-import { config } from './config.js';
+import { startHub } from './wire.js';
 
 async function main(): Promise<void> {
-  log.info({ ports: { internal: config.internalPort, public: config.publicPort } }, 'sesshin-hub starting');
-  // M3: REST server starts here. M5: WS server starts here.
-  // For now keep the process alive so smoke testing works.
-  process.on('SIGINT', () => process.exit(0));
-  process.on('SIGTERM', () => process.exit(0));
-  await new Promise<void>(() => { /* run forever */ });
+  const hub = await startHub();
+  const onSig = (): void => {
+    void hub.shutdown().finally(() => process.exit(0));
+  };
+  process.on('SIGINT', onSig);
+  process.on('SIGTERM', onSig);
+  log.info('sesshin-hub ready');
+  await new Promise<void>(() => {});
 }
-main().catch((e) => {
-  log.fatal({ err: e }, 'fatal');
-  process.exit(1);
-});
+main().catch((e) => { log.fatal({ err: e }, 'fatal'); process.exit(1); });
