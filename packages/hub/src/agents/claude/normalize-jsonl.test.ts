@@ -26,4 +26,8 @@ describe('jsonlLineToEvent', () => {
       source: 'observer:session-file-tail',
     });
   });
+  it('returns null for permission-mode records missing the permissionMode field', () => {
+    const line = JSON.stringify({ type: 'permission-mode', sessionId: 'claude-uuid' });
+    expect(jsonlLineToEvent('s1', line)).toBeNull();
+  });
 });

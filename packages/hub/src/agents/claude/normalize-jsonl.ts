@@ -10,11 +10,12 @@ export function jsonlLineToEvent(sessionId: string, line: string): NormalizedEve
   const eventId = randomUUID();
 
   if (parsed.type === 'permission-mode') {
-    const mode = typeof parsed.permissionMode === 'string' ? parsed.permissionMode : 'default';
+    const m = parsed.permissionMode;
+    if (typeof m !== 'string') return null;
     return {
       eventId, sessionId, ts,
       kind: 'agent-internal',
-      payload: { phase: 'mode-change', mode },
+      payload: { phase: 'mode-change', mode: m },
       source: 'observer:session-file-tail',
     };
   }

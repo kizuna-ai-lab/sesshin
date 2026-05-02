@@ -1,10 +1,8 @@
 import type { EventBus } from '../event-bus.js';
 import type { SessionRegistry } from '../registry/session-registry.js';
-import type { PermissionMode } from '@sesshin/shared';
+import { PermissionModeEnum, type PermissionMode } from '@sesshin/shared';
 
-const VALID_MODES = new Set<PermissionMode>([
-  'default','auto','acceptEdits','bypassPermissions','dontAsk','plan',
-]);
+const VALID_MODES = new Set<PermissionMode>(PermissionModeEnum.options);
 
 export function wireJsonlModeTracker(deps: { bus: EventBus; registry: SessionRegistry }): void {
   deps.bus.on((e) => {
