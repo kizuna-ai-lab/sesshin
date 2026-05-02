@@ -268,6 +268,8 @@ export async function startHub(): Promise<HubInstance> {
   // approval — otherwise they'd sit until their internal timeout.
   registry.on('session-removed', (id) => {
     for (const a of approvals.pendingForSession(id)) {
+      pendingHandlers.delete(a.requestId);
+      pendingUpdatedInput.delete(a.requestId);
       wsRef?.broadcast({
         type: 'session.prompt-request.resolved',
         sessionId: id, requestId: a.requestId, reason: 'session-ended',

@@ -41,4 +41,14 @@ describe('bashHandler', () => {
     );
     expect(d).toMatchObject({ kind: 'allow', sessionAllowAdd: 'Bash(git log:*)' });
   });
+
+  it('decide() with no selectedKeys falls through to ask', () => {
+    const d = bashHandler.decide([{ questionIndex: 0, selectedKeys: [] }], { command: 'ls' }, ctx);
+    expect(d).toEqual({ kind: 'ask' });
+  });
+
+  it('decide() with no answers falls through to ask', () => {
+    const d = bashHandler.decide([], { command: 'ls' }, ctx);
+    expect(d).toEqual({ kind: 'ask' });
+  });
 });
