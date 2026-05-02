@@ -130,4 +130,74 @@ describe('GET /api/sessions/:id/history', () => {
       await localSvr.close();
     }
   });
+
+  it('clamps invalid n=… to default 20', async () => {
+    let nReceived = -1;
+    const localRegistry = new SessionRegistry();
+    const localApprovals = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    const localSvr = createRestServer({
+      registry: localRegistry,
+      approvals: localApprovals,
+      historyForSession: (_sid, n) => { nReceived = n; return []; },
+    });
+    await localSvr.listen(0, '127.0.0.1');
+    const localPort = localSvr.address().port;
+    try {
+      await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/history?n=abc`);
+      expect(nReceived).toBe(20);
+    } finally {
+      await localSvr.close();
+    }
+  });
+
+  it('caps n=… at 100', async () => {
+    let nReceived = -1;
+    const localRegistry = new SessionRegistry();
+    const localApprovals = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    const localSvr = createRestServer({
+      registry: localRegistry,
+      approvals: localApprovals,
+      historyForSession: (_sid, n) => { nReceived = n; return []; },
+    });
+    await localSvr.listen(0, '127.0.0.1');
+    const localPort = localSvr.address().port;
+    try {
+      await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/history?n=999`);
+      expect(nReceived).toBe(100);
+    } finally {
+      await localSvr.close();
+    }
+  });
+
+  it('returns history newest-first', async () => {
+    const entries = [
+      { requestId: 'r1', tool: 'Bash',     resolvedAt: 1000, decision: 'allow' as const },
+      { requestId: 'r2', tool: 'Edit',     resolvedAt: 2000, decision: 'deny'  as const, reason: 'no' },
+      { requestId: 'r3', tool: 'WebFetch', resolvedAt: 3000, decision: 'allow' as const },
+    ];
+    // Mock historyForSession to mimic the real store: returns last-N reversed.
+    const newestFirst = (sid: string, n: number) => {
+      void sid;
+      return entries.slice(-n).reverse();
+    };
+    const localRegistry = new SessionRegistry();
+    const localApprovals = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    const localSvr = createRestServer({
+      registry: localRegistry,
+      approvals: localApprovals,
+      historyForSession: newestFirst,
+    });
+    await localSvr.listen(0, '127.0.0.1');
+    const localPort = localSvr.address().port;
+    try {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/history`);
+      const j = await r.json();
+      expect(j).toHaveLength(3);
+      expect(j[0].requestId).toBe('r3');   // newest first
+      expect(j[1].requestId).toBe('r2');
+      expect(j[2].requestId).toBe('r1');
+    } finally {
+      await localSvr.close();
+    }
+  });
 });

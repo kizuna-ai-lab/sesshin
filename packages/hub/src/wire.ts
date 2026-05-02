@@ -46,6 +46,7 @@ const historyStore = (() => {
       map.set(sid, arr);
     },
     get(sid: string, n: number): import('./rest/diagnostics.js').HistoryEntry[] {
+      // .slice creates a copy; .reverse() must not mutate the stored array.
       return (map.get(sid) ?? []).slice(-n).reverse();
     },
   };

@@ -188,7 +188,8 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
   if (hm) {
     const id = hm[1]!;
     if (method !== 'GET') return void res.writeHead(405).end();
-    const n = Number(url.searchParams.get('n') ?? 20);
+    const rawN = Number(url.searchParams.get('n') ?? 20);
+    const n = Number.isFinite(rawN) ? Math.min(100, Math.max(1, rawN)) : 20;
     const list = deps.historyForSession?.(id, n) ?? [];
     return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(list));
   }
