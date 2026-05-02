@@ -7,20 +7,27 @@ export interface HooksSettingsInput {
 
 const EVENTS = ['SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','Stop','StopFailure','SessionEnd'] as const;
 
+// claude (>= 2.x) does not honor a per-hook `env` field. Bake the env vars
+// into the command string via `/usr/bin/env VAR=value … cmd args` so the
+// spawned hook handler sees them in process.env regardless of how claude
+// invokes the command.
+function buildCommand(o: HooksSettingsInput, evt: string): string {
+  const env = [
+    `SESSHIN_HUB_URL=${o.hubUrl}`,
+    `SESSHIN_SESSION_ID=${o.sessionId}`,
+    `SESSHIN_AGENT=${o.agent}`,
+  ].join(' ');
+  return `/usr/bin/env ${env} ${o.hookHandlerPath} ${evt}`;
+}
+
 export function generateHooksOnlySettings(o: HooksSettingsInput): string {
-  const env = {
-    SESSHIN_HUB_URL:    o.hubUrl,
-    SESSHIN_SESSION_ID: o.sessionId,
-    SESSHIN_AGENT:      o.agent,
-  };
   const hooks: Record<string, unknown> = {};
   for (const evt of EVENTS) {
     hooks[evt] = [{
       matcher: '*',
       hooks: [{
         type: 'command',
-        command: `${o.hookHandlerPath} ${evt}`,
-        env,
+        command: buildCommand(o, evt),
       }],
     }];
   }

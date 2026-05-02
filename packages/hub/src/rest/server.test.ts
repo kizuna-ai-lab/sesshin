@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createRestServer, type RestServer } from './server.js';
 import { SessionRegistry } from '../registry/session-registry.js';
+import { PtyTap } from '../observers/pty-tap.js';
+import { request as httpRequest } from 'node:http';
 
 let svr: RestServer;
 let port: number;
@@ -20,5 +22,43 @@ describe('/api/health', () => {
   it('returns 405 on non-GET', async () => {
     const r = await fetch(`http://127.0.0.1:${port}/api/health`, { method: 'POST' });
     expect(r.status).toBe(405);
+  });
+});
+
+describe('/api/sessions/:id/raw — streaming', () => {
+  it('publishes each chunk to subscribers before the request ends', async () => {
+    // The CLI sends a long-lived chunked POST. Subscribers must see chunks
+    // as they arrive — buffering until end would mean debug-web never sees
+    // terminal output.
+    const registry = new SessionRegistry();
+    const tap = new PtyTap({ ringBytes: 4096 });
+    const server = createRestServer({ registry, tap });
+    await server.listen(0, '127.0.0.1');
+    const localPort = server.address().port;
+    try {
+      const sid = 'abcdef0011223344';
+      registry.register({ id: sid, name: 'n', agent: 'claude-code', cwd: '/tmp', pid: 1, sessionFilePath: '/tmp/x.jsonl' });
+
+      const seen: string[] = [];
+      const off = tap.subscribe(sid, (chunk) => seen.push(chunk.toString('utf-8')));
+
+      const req = httpRequest({
+        method: 'POST', host: '127.0.0.1', port: localPort,
+        path: `/api/sessions/${sid}/raw`,
+        headers: { 'content-type': 'application/octet-stream', 'transfer-encoding': 'chunked' },
+      });
+      req.on('error', () => {});
+      req.write('first ');
+      // Give the server a tick to process the chunk.
+      await new Promise((r) => setTimeout(r, 30));
+      expect(seen.join('')).toBe('first ');
+      req.write('second');
+      await new Promise((r) => setTimeout(r, 30));
+      expect(seen.join('')).toBe('first second');
+      req.destroy();
+      off();
+    } finally {
+      await server.close();
+    }
   });
 });

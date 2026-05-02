@@ -11,25 +11,47 @@ const settingsPath = settingsIdx >= 0 ? argv[settingsIdx + 1] : null;
 if (!settingsPath) { process.stderr.write('stub-claude: --settings required\n'); process.exit(2); }
 const settings = JSON.parse(readFileSync(settingsPath, 'utf-8'));
 
-const hookEnv = settings.hooks?.UserPromptSubmit?.[0]?.hooks?.[0]?.env ?? {};
-const sessionId = hookEnv.SESSHIN_SESSION_ID ?? 'stub-session';
-
-const cwd = process.cwd();
-const encoded = cwd.replaceAll('/', '-').replaceAll('.', '-');
-const sessionFile = join(homedir(), '.claude', 'projects', encoded, `${sessionId}.jsonl`);
-mkdirSync(dirname(sessionFile), { recursive: true });
-
-function fireHook(event, payload) {
-  const cmd = (settings.hooks[event]?.[0]?.hooks?.[0]?.command ?? '').split(' ');
-  if (cmd.length === 0 || !cmd[0]) return;
-  const env = { ...process.env, ...(settings.hooks[event][0].hooks[0].env ?? {}) };
-  spawnSync(cmd[0], cmd.slice(1), { input: JSON.stringify(payload), env, encoding: 'utf-8' });
+// Extract env vars baked into the command string via /usr/bin/env VAR=value …
+// (claude ignores the per-hook `env` field; we use env-prefix instead.)
+function parseEnvPrefix(cmdStr) {
+  const parts = (cmdStr ?? '').split(' ');
+  const env = {};
+  let i = 0;
+  if (parts[0] === '/usr/bin/env' || parts[0] === 'env') {
+    i = 1;
+    while (i < parts.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(parts[i])) {
+      const eq = parts[i].indexOf('=');
+      env[parts[i].slice(0, eq)] = parts[i].slice(eq + 1);
+      i += 1;
+    }
+  }
+  return { env, rest: parts.slice(i) };
 }
 
-function writeJsonl(line) { appendFileSync(sessionFile, JSON.stringify(line) + '\n'); }
+const startCmd = settings.hooks?.SessionStart?.[0]?.hooks?.[0]?.command ?? '';
+const { env: hookEnv } = parseEnvPrefix(startCmd);
+const sessionId = hookEnv.SESSHIN_SESSION_ID ?? 'stub-session';
+const transcriptPath = (() => {
+  const cwd = process.cwd();
+  const encoded = cwd.replaceAll('/', '-').replaceAll('.', '-');
+  return join(homedir(), '.claude', 'projects', encoded, `${sessionId}.jsonl`);
+})();
+
+mkdirSync(dirname(transcriptPath), { recursive: true });
+
+function fireHook(event, payload) {
+  const cmdStr = settings.hooks[event]?.[0]?.hooks?.[0]?.command ?? '';
+  const parts = cmdStr.split(' ');
+  if (parts.length === 0 || !parts[0]) return;
+  // Pass through to the binary unchanged. /usr/bin/env handles VAR=val
+  // arguments natively, so we don't need to lift them into our own env map.
+  spawnSync(parts[0], parts.slice(1), { input: JSON.stringify(payload), env: process.env, encoding: 'utf-8' });
+}
+
+function writeJsonl(line) { appendFileSync(transcriptPath, JSON.stringify(line) + '\n'); }
 
 const prompt = argv.find((a) => !a.startsWith('-') && a !== settingsPath) ?? 'do a thing';
-fireHook('SessionStart', { hook_event_name: 'SessionStart' });
+fireHook('SessionStart', { hook_event_name: 'SessionStart', session_id: sessionId, transcript_path: transcriptPath, cwd: process.cwd(), source: 'startup' });
 writeJsonl({ type: 'user', message: { content: prompt }, timestamp: new Date().toISOString() });
 fireHook('UserPromptSubmit', { hook_event_name: 'UserPromptSubmit', prompt });
 

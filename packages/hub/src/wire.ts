@@ -67,19 +67,34 @@ export async function startHub(): Promise<HubInstance> {
   });
   wireStateMachine({ bus: dedupedBus, registry });
 
-  // Hook ingest
-  const onHookEvent = wireHookIngest({ bus, registry });
-
-  // Start session-file-tail per registered session
+  // Hook ingest with sessionFilePath fixup. claude's SessionStart hook
+  // delivers the real `transcript_path` (a UUID-named JSONL); the CLI
+  // cannot know that path at register time, so it registers a placeholder
+  // we now correct here. After the path changes we restart the tail.
+  const innerHookEvent = wireHookIngest({ bus, registry });
   const stopTails = new Map<string, () => void>();
   const startTail = (id: string): void => {
     const s = registry.get(id);
     if (!s || stopTails.has(id)) return;
+    if (!s.sessionFilePath) return;
     stopTails.set(id, tailSessionFile({
       sessionId: id, path: s.sessionFilePath, bus, pollMs: 200,
       initialCursor: s.fileTailCursor,
     }));
   };
+  const onHookEvent: typeof innerHookEvent = (env) => {
+    if (env.event === 'SessionStart' && typeof env.raw['transcript_path'] === 'string') {
+      const tp = env.raw['transcript_path'] as string;
+      if (registry.setSessionFilePath(env.sessionId, tp)) {
+        log.info({ sessionId: env.sessionId, transcriptPath: tp }, 'updated sessionFilePath from SessionStart');
+        stopTails.get(env.sessionId)?.();
+        stopTails.delete(env.sessionId);
+        startTail(env.sessionId);
+      }
+    }
+    innerHookEvent(env);
+  };
+
   registry.on('session-added', (info) => startTail(info.id));
   registry.on('session-removed', (id) => {
     stopTails.get(id)?.();

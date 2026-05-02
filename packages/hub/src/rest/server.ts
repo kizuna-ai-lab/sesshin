@@ -78,10 +78,18 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     if (method !== 'POST') return void res.writeHead(405).end();
     if (!deps.registry.get(id)) return void res.writeHead(404).end();
     if (!deps.tap) return void res.writeHead(501).end();
-    const chunks: Buffer[] = [];
-    for await (const c of req) chunks.push(c as Buffer);
-    deps.tap.append(id, Buffer.concat(chunks));
-    return void res.writeHead(204).end();
+    // The CLI sends raw PTY bytes as a long-lived `transfer-encoding: chunked`
+    // POST that never ends. Process each chunk incrementally so subscribers
+    // (debug-web `session.raw`) see output in real time. Buffering until
+    // request end (`for await`) would mean nothing is ever published.
+    const tap = deps.tap;
+    req.on('data', (c: Buffer) => {
+      try { tap.append(id, c); } catch { /* ring may be dropped; ignore */ }
+    });
+    req.on('end',   () => { if (!res.headersSent) res.writeHead(204).end(); });
+    req.on('close', () => { if (!res.headersSent) res.writeHead(204).end(); });
+    req.on('error', () => { if (!res.headersSent) res.writeHead(400).end(); });
+    return;
   }
   const sink = url.pathname.match(/^\/api\/sessions\/([^/]+)\/sink-stream$/);
   if (sink) {

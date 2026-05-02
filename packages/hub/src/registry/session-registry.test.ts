@@ -35,4 +35,14 @@ describe('SessionRegistry', () => {
     snap.length = 0;
     expect(r.list()).toHaveLength(1);
   });
+  it('setSessionFilePath updates the path and resets the cursor; returns false when unchanged', () => {
+    const r = makeReg();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x.jsonl' });
+    r.setFileCursor('s1', 42);
+    expect(r.setSessionFilePath('s1', '/y.jsonl')).toBe(true);
+    expect(r.get('s1')?.sessionFilePath).toBe('/y.jsonl');
+    expect(r.get('s1')?.fileTailCursor).toBe(0);
+    expect(r.setSessionFilePath('s1', '/y.jsonl')).toBe(false);
+    expect(r.setSessionFilePath('missing', '/z.jsonl')).toBe(false);
+  });
 });

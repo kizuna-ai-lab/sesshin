@@ -89,6 +89,21 @@ export class SessionRegistry extends EventEmitter {
     if (s) s.fileTailCursor = cursor;
   }
 
+  /**
+   * Update the JSONL transcript path for a session. Called when SessionStart
+   * delivers claude's actual `transcript_path` (the CLI cannot know it at
+   * register time because claude assigns its own UUID). Returns true if the
+   * path actually changed.
+   */
+  setSessionFilePath(id: string, path: string): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    if (s.sessionFilePath === path) return false;
+    s.sessionFilePath = path;
+    s.fileTailCursor = 0;
+    return true;
+  }
+
   recordHeartbeat(id: string): boolean {
     const s = this.sessions.get(id);
     if (!s) return false;
