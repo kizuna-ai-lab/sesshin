@@ -47,6 +47,20 @@ describe('ApprovalManager', () => {
     expect(seen).toHaveLength(1);
   });
 
+  it('cancelForSession does NOT invoke onExpire (only timeout does)', async () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 5000 });
+    const seen: string[] = [];
+    const { decision } = m.open({
+      sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' },
+      onExpire: (a) => seen.push(a.requestId),
+    });
+    m.cancelForSession('s1');
+    // Resolves cleanly to 'ask' with the cancellation reason
+    await expect(decision).resolves.toMatchObject({ decision: 'ask' });
+    // onExpire was NOT called — that's reserved for the timeout path
+    expect(seen).toEqual([]);
+  });
+
   it('honors a custom timeoutDecision', async () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 30, timeoutDecision: 'deny', timeoutReason: 'no client' });
     const { decision } = m.open({ sessionId: 's1', tool: 'T', toolInput: {} });

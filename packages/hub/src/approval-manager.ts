@@ -84,6 +84,10 @@ export class ApprovalManager {
   /**
    * Cancel any pending requests for a session (e.g., session unregistered).
    * Resolves them with `decision: 'ask'` so the originating hook unblocks.
+   *
+   * Does NOT invoke `onExpire`; that callback is reserved for the timeout
+   * path. Callers that need to notify clients about cancellation should
+   * broadcast their own resolved-message before invoking this method.
    */
   cancelForSession(sessionId: string, reason = 'sesshin: session ended'): number {
     let cancelled = 0;
@@ -91,7 +95,6 @@ export class ApprovalManager {
       if (e.sessionId !== sessionId) continue;
       clearTimeout(e.timer);
       this.pending.delete(rid);
-      try { e.onExpire({ requestId: e.requestId, sessionId: e.sessionId, tool: e.tool, toolInput: e.toolInput, ...(e.toolUseId !== undefined ? { toolUseId: e.toolUseId } : {}), createdAt: e.createdAt, expiresAt: e.expiresAt }); } catch {}
       e.resolve({ decision: 'ask', reason });
       cancelled += 1;
     }

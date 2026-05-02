@@ -177,5 +177,6 @@ export type DownstreamMessage = z.infer<typeof DownstreamMessageSchema>;
 export type SessionPromptRequest         = z.infer<typeof SessionPromptRequestSchema>;
 export type SessionPromptRequestResolved = z.infer<typeof SessionPromptRequestResolvedSchema>;
 export type PromptResponse               = z.infer<typeof PromptResponseSchema>;
+export type PromptResponseAnswer         = z.infer<typeof PromptResponseSchema>['answers'][number];
 export type PromptQuestion               = z.infer<typeof PromptQuestionSchema>;
 export type PromptOption                 = z.infer<typeof PromptOptionSchema>;

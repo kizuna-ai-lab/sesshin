@@ -4,14 +4,7 @@ import {
   addSummary, addEvent, appendRaw, lastEventId,
   addPromptRequest, removePromptRequest,
 } from './store.js';
-import type { Action } from '@sesshin/shared';
-
-export interface PromptResponseAnswer {
-  questionIndex: number;
-  selectedKeys: string[];
-  freeText?: string;
-  notes?: string;
-}
+import type { Action, PromptResponseAnswer } from '@sesshin/shared';
 
 export interface WsClient {
   sendAction(sessionId: string, action: Action): void;
