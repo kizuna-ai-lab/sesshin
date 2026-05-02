@@ -2,11 +2,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import { z } from 'zod';
 import type { SessionRegistry } from '../registry/session-registry.js';
+import type { PtyTap } from '../observers/pty-tap.js';
 
 export interface RestServerDeps {
   registry: SessionRegistry;
   /** Fired when a valid hook event arrives. Wired in T26. */
   onHookEvent?: (envelope: { agent: string; sessionId: string; ts: number; event: string; raw: Record<string, unknown> }) => void;
+  /** PtyTap for raw byte ingest (T30/M4). */
+  tap?: PtyTap;
 }
 
 export interface RestServer {
@@ -60,6 +63,17 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     if (method === 'GET')  return listSessions(res, deps);
     if (method === 'POST') return registerSession(req, res, deps);
     return void res.writeHead(405).end();
+  }
+  const raw = url.pathname.match(/^\/api\/sessions\/([^/]+)\/raw$/);
+  if (raw) {
+    const id = raw[1]!;
+    if (method !== 'POST') return void res.writeHead(405).end();
+    if (!deps.registry.get(id)) return void res.writeHead(404).end();
+    if (!deps.tap) return void res.writeHead(501).end();
+    const chunks: Buffer[] = [];
+    for await (const c of req) chunks.push(c as Buffer);
+    deps.tap.append(id, Buffer.concat(chunks));
+    return void res.writeHead(204).end();
   }
   const hb = url.pathname.match(/^\/api\/sessions\/([^/]+)\/heartbeat$/);
   if (hb) {

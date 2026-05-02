@@ -57,3 +57,19 @@ describe('heartbeat', () => {
     expect(r.status).toBe(404);
   });
 });
+
+describe('/api/sessions/:id/raw', () => {
+  it('writes received bytes into the PtyTap', async () => {
+    const { PtyTap } = await import('../observers/pty-tap.js');
+    const tap = new PtyTap({ ringBytes: 1024 });
+    const localRegistry = new SessionRegistry();
+    localRegistry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const localSvr = createRestServer({ registry: localRegistry, tap });
+    await localSvr.listen(0, '127.0.0.1');
+    const localPort = localSvr.address().port;
+    const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/raw`, { method: 'POST', body: 'hello' });
+    expect(r.status).toBe(204);
+    expect(tap.snapshot('s1').toString('utf-8')).toBe('hello');
+    await localSvr.close();
+  });
+});
