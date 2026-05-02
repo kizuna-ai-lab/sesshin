@@ -239,3 +239,46 @@ are well-understood, and there is no value in deviating from it.
 
 Steps 1 to 6 are the load-bearing part. Steps 7 onward iterate against a
 working hub.
+
+## v1.5 — Ambient remote control
+
+See `docs/superpowers/specs/2026-05-03-ambient-remote-control-v1.5-design.md`
+for the design of mode-aware approval gating, the unified
+`session.prompt-request` wire shape (claude's `PromptRequest` shape
+forwarded verbatim), and the per-tool interaction handler registry.
+
+Key v1.5 components:
+
+- **Mode tracking** — `Substate.permissionMode` is sourced
+  authoritatively from JSONL `permission-mode` records (Task 1). The
+  CLI seeds an initial mode from `~/.claude/settings.json` and the
+  `--permission-mode` flag (Task 2). The approval gate consults this
+  authoritative mode rather than the lossy hook payload (Task 3).
+
+- **Per-tool handler registry**
+  (`packages/hub/src/agents/claude/tool-handlers/`) — Bash, FileEdit,
+  WebFetch, AskUserQuestion, ExitPlanMode, and a catch-all handler each
+  translate a tool's `tool_input` into a wire-uniform
+  `{questions, options}` shape and translate user answers back into a
+  hook decision with optional `updatedInput` and `sessionAllowAdd`
+  (Task 5).
+
+- **Permission rules** — port of claude's rule format (`Tool` /
+  `Tool(content)` with `:*` prefix wildcard for Bash and `/*` glob for
+  file/url tools). The approval gate consults the merged
+  `claudeAllowRules ∪ sessionAllowList` before falling through to the
+  gated-tool check (Task 6).
+
+- **Subscribed-client gating** — the hub tracks per-session count of
+  `actions`-capable clients. Gate returns false when zero clients are
+  attached (sesshin transparent → claude TUI native flow). Last-disconnect
+  releases pending approvals as `'ask'` so claude's TUI takes over
+  (Task 7).
+
+- **REST diagnostics + CLI subcommands** — `/api/diagnostics`,
+  `/api/sessions/:id/{clients,history,trust,gate,pin,quiet}` and matching
+  `sesshin status / clients / history / trust / gate / pin / quiet`
+  subcommands (Tasks 9, 11).
+
+- **Slash commands** — bundled `.md` files installed via
+  `sesshin commands install` (Tasks 10, 11).

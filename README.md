@@ -165,6 +165,58 @@ before running `sesshin claude`. The CLI will read your existing
 `~/.claude/settings.json` hooks and compose them with Sesshin's into the
 per-session temp file. User-visible behavior is unchanged.
 
+## Permission gating
+
+Sesshin observes Claude Code's `PreToolUse` hook and is mode-aware. In
+`auto`, `acceptEdits`, `bypassPermissions`, `dontAsk`, or `plan` mode
+sesshin is transparent: no remote prompt is raised and the tool call
+proceeds under claude's own policy. In `default` mode, write-class tools
+(`Bash`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `PowerShell`,
+`WebFetch`) trigger a `session.prompt-request` that the web user can
+answer.
+
+If no client is currently subscribed for that session, sesshin steps
+aside and lets claude's TUI prompt the laptop user as normal. So the
+mental model is: **open the web UI to take over, close it to give
+control back to the laptop.** The session also tracks claude's
+permission rules and any session-allow rules added via `/sesshin-trust`,
+short-circuiting the gate when an allow rule already covers the call.
+
+Environment variables:
+
+- `SESSHIN_APPROVAL_GATE` — `disabled` | `auto` (default) | `always`.
+  `disabled` skips remote gating entirely; `always` gates every tool
+  regardless of mode (useful for paranoid setups).
+- `SESSHIN_APPROVAL_TIMEOUT_MS` — hub-side timeout before a pending
+  approval falls back to claude's TUI prompt. Default 60000.
+
+## Slash commands
+
+Sesshin ships a set of slash commands that surface session diagnostics
+and per-session controls inside Claude Code:
+
+| Command | Purpose |
+|---|---|
+| `/sesshin-status`  | Current mode, gate, pending approvals, clients |
+| `/sesshin-clients` | List connected web/IM/device adapters |
+| `/sesshin-history` | Last N remotely resolved decisions |
+| `/sesshin-trust`   | Add a session-allow rule, e.g. `Bash(git log:*)` |
+| `/sesshin-gate`    | Override gate policy for this session |
+| `/sesshin-pin`     | Sticky note shown on remote clients |
+| `/sesshin-quiet`   | Suspend remote notifications for a duration |
+
+Install them once with:
+
+```bash
+sesshin commands install
+```
+
+This copies the bundled markdown files to `~/.claude/commands/`. The
+install is opt-in and one-time; nothing is touched until you run it.
+We probed the `--settings`-delivered plugin path empirically and it did
+not work in our environment, so the manual install is the supported
+path for v1.5.
+
 ## Log file
 
 The hub writes to `~/.cache/sesshin/hub.log`. Tail it for diagnostics.
