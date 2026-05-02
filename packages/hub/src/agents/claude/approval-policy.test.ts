@@ -63,6 +63,21 @@ describe('shouldGatePreToolUse — auto policy', () => {
     expect(shouldGatePreToolUse({ tool_name: 'Bash' }, undefined, 'auto')).toBe(true);
     expect(shouldGatePreToolUse({ tool_name: 'Read' }, undefined, 'auto')).toBe(false);
   });
+
+  it('does NOT gate when tool matches sessionAllowList', () => {
+    expect(shouldGatePreToolUse(
+      { permission_mode: 'default', tool_name: 'Bash', tool_input: { command: 'git log --oneline' } },
+      'default', 'auto',
+      { sessionAllowList: ['Bash(git log:*)'], claudeAllowRules: [] },
+    )).toBe(false);
+  });
+  it('does NOT gate when tool matches claudeAllowRules', () => {
+    expect(shouldGatePreToolUse(
+      { permission_mode: 'default', tool_name: 'Bash', tool_input: { command: 'npm install' } },
+      'default', 'auto',
+      { sessionAllowList: [], claudeAllowRules: ['Bash(npm install)'] },
+    )).toBe(false);
+  });
 });
 
 describe('shouldGatePreToolUse — disabled policy', () => {

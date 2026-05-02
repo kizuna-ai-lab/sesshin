@@ -10,8 +10,14 @@
  * hub must respond with HTTP 204 (no decision) — *not* 200 with "ask".
  */
 import type { PermissionMode } from '@sesshin/shared';
+import { ruleMatchesAny } from './permission-rules.js';
 
 export type ApprovalGatePolicy = 'disabled' | 'auto' | 'always';
+
+export interface AllowContext {
+  sessionAllowList: readonly string[];
+  claudeAllowRules: readonly string[];
+}
 
 // Modes where claude auto-executes without prompting. We must never gate
 // these; doing so produces a regression vs. running claude without sesshin.
@@ -33,6 +39,7 @@ export function shouldGatePreToolUse(
   raw: Record<string, unknown>,
   knownMode: PermissionMode | undefined,
   policy: ApprovalGatePolicy,
+  allow: AllowContext = { sessionAllowList: [], claudeAllowRules: [] },
 ): boolean {
   if (policy === 'disabled') return false;
   if (policy === 'always')   return true;
@@ -43,5 +50,8 @@ export function shouldGatePreToolUse(
   if (AUTO_EXECUTE_MODES.has(mode)) return false;
   if (mode === 'plan')              return false;
   const tool = typeof raw['tool_name'] === 'string' ? raw['tool_name'] : '';
+  const toolInput = (raw['tool_input'] as Record<string, unknown>) ?? {};
+  if (ruleMatchesAny(tool, toolInput, allow.sessionAllowList)) return false;
+  if (ruleMatchesAny(tool, toolInput, allow.claudeAllowRules))  return false;
   return GATED_TOOLS.has(tool);
 }
