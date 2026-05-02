@@ -1,8 +1,6 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { PermissionModeEnum, type PermissionMode } from '@sesshin/shared';
-
-const VALID_MODES = new Set<PermissionMode>(PermissionModeEnum.options);
+import { isPermissionMode, type PermissionMode } from '@sesshin/shared';
 
 export interface ClaudeSettings { defaultMode: PermissionMode | null; allowRules: string[] }
 
@@ -13,7 +11,7 @@ function tryRead(path: string): unknown {
 
 function extractMode(j: unknown): PermissionMode | null {
   const m = (j as { permissions?: { defaultMode?: unknown } } | null)?.permissions?.defaultMode;
-  return typeof m === 'string' && VALID_MODES.has(m as PermissionMode) ? (m as PermissionMode) : null;
+  return typeof m === 'string' && isPermissionMode(m) ? m : null;
 }
 
 function extractAllow(j: unknown): string[] {
@@ -26,6 +24,8 @@ export function readClaudeSettings(opts: { home: string; cwd: string }): ClaudeS
   const projectJson = tryRead(join(opts.cwd,  '.claude/settings.json'));
   return {
     defaultMode: extractMode(projectJson) ?? extractMode(userJson),
+    // User rules first, project rules second — matches Claude's settings layering
+    // where project settings refine/append to user settings rather than replace.
     allowRules: [...extractAllow(userJson), ...extractAllow(projectJson)],
   };
 }

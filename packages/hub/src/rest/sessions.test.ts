@@ -54,6 +54,9 @@ describe('/api/sessions', () => {
     expect(r.status).toBe(201);
     const list = await (await fetch(`http://127.0.0.1:${port}/api/sessions`)).json();
     expect(list.find((s: any) => s.id === 'sNew')?.substate.permissionMode).toBe('auto');
+    // claudeAllowRules round-trip — accessed via the registry directly because
+    // publicView intentionally strips this internal-state field.
+    expect(registry.get('sNew')?.claudeAllowRules).toEqual(['Bash(git log:*)']);
   });
 });
 

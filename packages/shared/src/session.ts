@@ -14,6 +14,11 @@ export const PermissionModeEnum = z.enum([
 ]);
 export type PermissionMode = z.infer<typeof PermissionModeEnum>;
 
+/** Type guard: is `s` a valid PermissionMode? Single source of truth for the enum. */
+export function isPermissionMode(s: string): s is PermissionMode {
+  return (PermissionModeEnum.options as readonly string[]).includes(s);
+}
+
 export const SubstateSchema = z.object({
   currentTool:           z.string().nullable(),
   lastTool:              z.string().nullable(),

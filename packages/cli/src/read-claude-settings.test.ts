@@ -9,7 +9,10 @@ beforeEach(() => {
   HOME = mkdtempSync(join(tmpdir(), 'sesshin-test-home-'));
   CWD  = mkdtempSync(join(tmpdir(), 'sesshin-test-cwd-'));
 });
-afterEach(() => { rmSync(HOME, { recursive: true, force: true }); rmSync(CWD, { recursive: true, force: true }); });
+afterEach(() => {
+  if (HOME) rmSync(HOME, { recursive: true, force: true });
+  if (CWD)  rmSync(CWD,  { recursive: true, force: true });
+});
 
 describe('readClaudeSettings', () => {
   it('returns empty defaults when no settings exist', () => {

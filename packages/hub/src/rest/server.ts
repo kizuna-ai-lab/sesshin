@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { z } from 'zod';
+import { PermissionModeEnum } from '@sesshin/shared';
 import type { SessionRegistry } from '../registry/session-registry.js';
 import type { PtyTap } from '../observers/pty-tap.js';
 
@@ -43,7 +44,7 @@ const RegisterBody = z.object({
   cwd:                   z.string(),
   pid:                   z.number().int(),
   sessionFilePath:       z.string(),
-  initialPermissionMode: z.enum(['default','auto','acceptEdits','bypassPermissions','dontAsk','plan']).optional(),
+  initialPermissionMode: PermissionModeEnum.optional(),
   claudeAllowRules:      z.array(z.string()).optional(),
 });
 
