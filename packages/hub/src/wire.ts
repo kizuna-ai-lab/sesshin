@@ -19,6 +19,7 @@ import { Summarizer } from './summarizer/index.js';
 import { runModeBPrime } from './summarizer/mode-b-prime.js';
 import { runModeB } from './summarizer/mode-b.js';
 import { wireSummarizerTrigger } from './summarizer-trigger.js';
+import { ApprovalManager } from './approval-manager.js';
 
 export interface HubInstance {
   rest: RestServer;
@@ -104,12 +105,54 @@ export async function startHub(): Promise<HubInstance> {
   });
   for (const s of registry.list()) startTail(s.id);
 
+  // Remote approval flow (Path B): when a PreToolUse hook arrives we hold
+  // the hook handler's HTTP response until either a client posts a
+  // confirmation.decision over WS, or our internal timeout falls back to
+  // "ask" so claude's TUI prompt takes over on the laptop.
+  const approvals = new ApprovalManager({
+    defaultTimeoutMs: Number(process.env['SESSHIN_APPROVAL_TIMEOUT_MS'] ?? 60_000),
+  });
+
+  // Forward declaration for ws so the REST onPreToolUseApproval closure can
+  // reach the broadcaster. Filled in immediately after createWsServer below.
+  let wsRef: WsServerInstance | null = null;
+
   // REST server
   const rest = createRestServer({
     registry, tap, onHookEvent,
     onInjectFromHub: (id, data, source) => bridge.deliver(id, data, source).then((r) => r.ok),
     onAttachSink: (id, deliver) => { bridge.setSink(id, deliver); },
     onDetachSink: (id) => { bridge.clearSink(id); },
+    onPreToolUseApproval: async (env) => {
+      const tool = typeof env.raw['tool_name'] === 'string' ? env.raw['tool_name'] : 'unknown';
+      const toolInput = env.raw['tool_input'] ?? null;
+      const toolUseId = typeof env.raw['tool_use_id'] === 'string' ? env.raw['tool_use_id'] : undefined;
+      const { request, decision } = approvals.open({
+        sessionId: env.sessionId, tool, toolInput,
+        ...(toolUseId !== undefined ? { toolUseId } : {}),
+        onExpire: (a) => {
+          wsRef?.broadcast({
+            type: 'session.confirmation.resolved',
+            sessionId: a.sessionId, requestId: a.requestId,
+            decision: 'ask', reason: 'sesshin: approval timed out',
+          });
+        },
+      });
+      registry.updateState(env.sessionId, 'awaiting-confirmation');
+      wsRef?.broadcast({
+        type: 'session.confirmation',
+        sessionId: env.sessionId,
+        requestId: request.requestId,
+        tool, toolInput,
+        ...(toolUseId !== undefined ? { toolUseId } : {}),
+        expiresAt: request.expiresAt,
+      });
+      const out = await decision;
+      // Whichever path ended the approval, restore the session to running so
+      // the laptop and remote can keep typing.
+      registry.updateState(env.sessionId, 'running');
+      return out;
+    },
   });
   await rest.listen(config.internalPort, config.internalHost);
   log.info({ port: config.internalPort }, 'hub REST listening');
@@ -124,9 +167,25 @@ export async function startHub(): Promise<HubInstance> {
       const r = await bridge.deliver(sessionId, data, source);
       return { ok: r.ok, ...(r.reason !== undefined ? { reason: r.reason } : {}) };
     },
+    onConfirmationDecision: (sessionId, requestId, decision, reason) => {
+      const ok = approvals.decide(requestId, { decision, ...(reason !== undefined ? { reason } : {}) });
+      if (ok) {
+        ws.broadcast({
+          type: 'session.confirmation.resolved',
+          sessionId, requestId, decision,
+          ...(reason !== undefined ? { reason } : {}),
+        });
+      }
+      return ok;
+    },
   });
+  wsRef = ws;
   await ws.listen(config.publicPort, config.publicHost);
   log.info({ port: config.publicPort }, 'hub WS listening');
+
+  // When a session disappears, unblock any pending hook handlers waiting on
+  // approval — otherwise they'd sit until their internal timeout.
+  registry.on('session-removed', (id) => { approvals.cancelForSession(id); });
 
   // Broadcast PTY raw output to WS clients with the `raw` capability.
   const rawSubscriptions = new Map<string, () => void>();

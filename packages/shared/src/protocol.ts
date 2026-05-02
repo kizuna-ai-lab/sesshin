@@ -42,10 +42,22 @@ export const ClientPongSchema = z.object({
   type:  z.literal('client.pong'),
   nonce: z.string(),
 });
+// Sent by a client in response to a server.confirmation. Carries the user's
+// permission decision for a PreToolUse approval that the hub is holding open
+// (the originating hook handler is blocked waiting for this answer).
+export const ConfirmationDecisionEnum = z.enum(['allow','deny','ask']);
+export const ConfirmationDecisionSchema = z.object({
+  type:      z.literal('confirmation.decision'),
+  sessionId: z.string(),
+  requestId: z.string(),
+  decision:  ConfirmationDecisionEnum,
+  reason:    z.string().optional(),
+});
 
 export const UpstreamMessageSchema = z.discriminatedUnion('type', [
   ClientIdentifySchema, SubscribeSchema, UnsubscribeSchema,
   InputTextSchema, InputActionSchema, ClientPongSchema,
+  ConfirmationDecisionSchema,
 ]);
 export type UpstreamMessage = z.infer<typeof UpstreamMessageSchema>;
 
@@ -106,10 +118,35 @@ export const ServerPingSchema = z.object({
   type:  z.literal('server.ping'),
   nonce: z.string(),
 });
+// Server-side announcement that the hub is holding a PreToolUse hook open
+// pending a permission decision. The hook handler will block on the hub's
+// response until either a client posts ConfirmationDecisionSchema for the
+// matching requestId, or the hub's internal timeout elapses (in which case
+// the hub falls back to "ask" so claude's TUI takes over).
+export const SessionConfirmationSchema = z.object({
+  type:       z.literal('session.confirmation'),
+  sessionId:  z.string(),
+  requestId:  z.string(),
+  tool:       z.string(),
+  toolInput:  z.unknown(),
+  toolUseId:  z.string().optional(),
+  expiresAt:  z.number().int(),
+});
+// Server tells clients a previously announced confirmation has been resolved
+// (by another client, by timeout, or by the originating session ending).
+// Clients use this to dismiss any pending confirmation UI for requestId.
+export const SessionConfirmationResolvedSchema = z.object({
+  type:       z.literal('session.confirmation.resolved'),
+  sessionId:  z.string(),
+  requestId:  z.string(),
+  decision:   ConfirmationDecisionEnum,
+  reason:     z.string().optional(),
+});
 
 export const DownstreamMessageSchema = z.discriminatedUnion('type', [
   ServerHelloSchema, SessionListSchema, SessionAddedSchema, SessionRemovedSchema,
   SessionStateMsgSchema, SessionEventMsgSchema, SessionSummaryMsgSchema,
   SessionAttentionSchema, SessionRawSchema, ServerErrorSchema, ServerPingSchema,
+  SessionConfirmationSchema, SessionConfirmationResolvedSchema,
 ]);
 export type DownstreamMessage = z.infer<typeof DownstreamMessageSchema>;

@@ -42,10 +42,20 @@ mkdirSync(dirname(transcriptPath), { recursive: true });
 function fireHook(event, payload) {
   const cmdStr = settings.hooks[event]?.[0]?.hooks?.[0]?.command ?? '';
   const parts = cmdStr.split(' ');
-  if (parts.length === 0 || !parts[0]) return;
+  if (parts.length === 0 || !parts[0]) return null;
   // Pass through to the binary unchanged. /usr/bin/env handles VAR=val
   // arguments natively, so we don't need to lift them into our own env map.
-  spawnSync(parts[0], parts.slice(1), { input: JSON.stringify(payload), env: process.env, encoding: 'utf-8' });
+  const r = spawnSync(parts[0], parts.slice(1), { input: JSON.stringify(payload), env: process.env, encoding: 'utf-8' });
+  // For PreToolUse, claude reads stdout for the permission decision.
+  if (event === 'PreToolUse') {
+    try {
+      const out = JSON.parse(r.stdout ?? '');
+      const d = out?.hookSpecificOutput?.permissionDecision;
+      if (d === 'allow' || d === 'deny' || d === 'ask') return d;
+    } catch { /* fall through */ }
+    return 'ask';
+  }
+  return null;
 }
 
 function writeJsonl(line) { appendFileSync(transcriptPath, JSON.stringify(line) + '\n'); }
@@ -56,8 +66,13 @@ writeJsonl({ type: 'user', message: { content: prompt }, timestamp: new Date().t
 fireHook('UserPromptSubmit', { hook_event_name: 'UserPromptSubmit', prompt });
 
 setTimeout(() => {
-  fireHook('PreToolUse',  { hook_event_name: 'PreToolUse',  tool_name: 'Read', tool_input: { path: '/etc/hosts' } });
-  fireHook('PostToolUse', { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_response: 'localhost' });
+  const decision = fireHook('PreToolUse', { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { path: '/etc/hosts' }, tool_use_id: 'toolu_stub_1' });
+  if (decision === 'deny') {
+    fireHook('PostToolUse', { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_response: 'denied by remote approver' });
+  } else {
+    // 'allow' or 'ask' (laptop TUI auto-approves the stub).
+    fireHook('PostToolUse', { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_response: 'localhost' });
+  }
   // Write an assistant line before prompting so the state machine moves out of `running`.
   writeJsonl({ type: 'assistant', message: { content: 'I will respond now. Confirm? (y/n)' }, timestamp: new Date().toISOString() });
   process.stdout.write('I will respond now. Confirm? (y/n) ');

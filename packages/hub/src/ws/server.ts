@@ -15,6 +15,12 @@ export interface WsServerDeps {
   staticDir: string | null;
   /** Called when a WS client sends an input.action or input.text. Wired in T38. */
   onInput?: (sessionId: string, data: string, source: string) => Promise<{ ok: boolean; reason?: string }>;
+  /**
+   * Called when a client posts a confirmation.decision for a pending
+   * PreToolUse approval. Returns whether a matching pending request was
+   * found (false → stale or already resolved by another client/timeout).
+   */
+  onConfirmationDecision?: (sessionId: string, requestId: string, decision: 'allow' | 'deny' | 'ask', reason?: string) => boolean;
 }
 
 export interface WsServerInstance {
@@ -35,15 +41,17 @@ const MIME: Record<string, string> = {
 
 function capabilityRequiredFor(msgType: string): string | null {
   switch (msgType) {
-    case 'session.summary':   return 'summary';
-    case 'session.raw':       return 'raw';
-    case 'session.event':     return 'events';
-    case 'session.attention': return 'attention';
+    case 'session.summary':              return 'summary';
+    case 'session.raw':                  return 'raw';
+    case 'session.event':                return 'events';
+    case 'session.attention':            return 'attention';
+    case 'session.confirmation':
+    case 'session.confirmation.resolved': return 'actions';
     case 'session.state':
     case 'session.list':
     case 'session.added':
-    case 'session.removed':   return 'state';
-    default:                  return null;
+    case 'session.removed':              return 'state';
+    default:                             return null;
   }
 }
 

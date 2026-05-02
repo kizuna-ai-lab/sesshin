@@ -66,7 +66,7 @@ async function main() {
 
   // open WS, capture events
   const ws = new WS('ws://127.0.0.1:9662/v1/ws');
-  const got = { events: [], summary: false, state: null };
+  const got = { events: [], summary: false, state: null, confirmations: [], confirmationResolved: 0 };
   await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
   ws.send(JSON.stringify({ type: 'client.identify', protocol: 1, client: { kind: 'debug-web', version: '0', capabilities: ['summary','events','state','actions'] } }));
   ws.send(JSON.stringify({ type: 'subscribe', sessions: 'all', since: null }));
@@ -75,6 +75,17 @@ async function main() {
     if (msg.type === 'session.event')   got.events.push(msg);
     if (msg.type === 'session.summary') got.summary = true;
     if (msg.type === 'session.state')   got.state = msg.state;
+    if (msg.type === 'session.confirmation') {
+      got.confirmations.push(msg);
+      // Verify path B: respond with 'allow'. The hub must release the
+      // PreToolUse hook handler with this decision.
+      ws.send(JSON.stringify({
+        type: 'confirmation.decision',
+        sessionId: msg.sessionId, requestId: msg.requestId,
+        decision: 'allow', reason: 'e2e: auto-approve',
+      }));
+    }
+    if (msg.type === 'session.confirmation.resolved') got.confirmationResolved += 1;
   });
 
   // wait until stub-claude prompts for confirmation AND the session state allows input
@@ -103,6 +114,8 @@ async function main() {
   if (got.events.length === 0)  fail('no session.event received');
   if (got.state !== null && got.state !== 'idle' && got.state !== 'done') fail(`unexpected final state: ${got.state}`);
   if (!cliOut.includes('You said: y')) fail(`stub-claude did not see "y": output was:\n${cliOut}`);
+  if (got.confirmations.length === 0)  fail('no session.confirmation received (path B never engaged)');
+  if (got.confirmationResolved === 0)  fail('no session.confirmation.resolved received after we approved');
 
   console.log('e2e PASS');
   ws.close();

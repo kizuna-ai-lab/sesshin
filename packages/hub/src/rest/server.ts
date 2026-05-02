@@ -16,6 +16,15 @@ export interface RestServerDeps {
   onAttachSink?: (sessionId: string, deliver: (data: string, source: string) => Promise<void>) => void;
   /** Called when the CLI sink-stream connection closes (so the bridge can drop the sink). */
   onDetachSink?: (sessionId: string) => void;
+  /**
+   * Called for PreToolUse hooks. Returns the permission decision once a
+   * client (or timeout) has resolved it. The hook handler is blocked on the
+   * HTTP response until this resolves; the body is then echoed verbatim to
+   * claude on stdout.
+   */
+  onPreToolUseApproval?: (envelope: {
+    agent: string; sessionId: string; ts: number; event: string; raw: Record<string, unknown>;
+  }) => Promise<{ decision: 'allow' | 'deny' | 'ask'; reason?: string }>;
 }
 
 export interface RestServer {
@@ -144,9 +153,30 @@ async function ingestHook(req: IncomingMessage, res: ServerResponse, deps: RestS
   const parsed = HookBody.safeParse(body);
   if (!parsed.success) return void res.writeHead(400).end();
   if (!deps.registry.get(parsed.data.sessionId)) return void res.writeHead(404).end();
-  // Real ingest pipeline lands in T26 (observers/hook-ingest.ts).
-  // For now we just acknowledge; the registry is updated in observers/.
+  // Always emit the event onto the bus (state machine, summary trigger, …).
   deps.onHookEvent?.(parsed.data);
+  // PreToolUse can be intercepted to drive remote approval. We hold the
+  // response until a client decides (or the hub's internal timeout fires
+  // and falls back to "ask"). Claude is happy to wait — its default hook
+  // timeout is 600s. The client never sees this HTTP request directly; it
+  // sends its decision over the WS protocol instead.
+  if (parsed.data.event === 'PreToolUse' && deps.onPreToolUseApproval) {
+    let outcome: { decision: 'allow' | 'deny' | 'ask'; reason?: string };
+    try {
+      outcome = await deps.onPreToolUseApproval(parsed.data);
+    } catch {
+      outcome = { decision: 'ask', reason: 'sesshin: approval flow errored — falling back' };
+    }
+    const out = {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: outcome.decision,
+        ...(outcome.reason !== undefined ? { permissionDecisionReason: outcome.reason } : {}),
+      },
+    };
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(out));
+    return;
+  }
   res.writeHead(204).end();
 }
 

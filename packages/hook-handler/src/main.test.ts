@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HANDLER = join(HERE, '../dist/main.js');
 
-function startFakeHub(opts: { delayMs?: number; respondStatus?: number } = {}) {
+function startFakeHub(opts: { delayMs?: number; respondStatus?: number; respondBody?: string; respondContentType?: string } = {}) {
   return new Promise<{ port: number; received: any[]; close: () => void }>((resolve) => {
     const received: any[] = [];
     const server = createServer(async (req, res) => {
@@ -15,8 +15,8 @@ function startFakeHub(opts: { delayMs?: number; respondStatus?: number } = {}) {
       for await (const c of req) chunks.push(c as Buffer);
       try { received.push(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); } catch { /* */ }
       if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs));
-      res.writeHead(opts.respondStatus ?? 200);
-      res.end();
+      res.writeHead(opts.respondStatus ?? 200, { 'content-type': opts.respondContentType ?? 'application/json' });
+      res.end(opts.respondBody ?? '');
     });
     server.listen(0, '127.0.0.1', () => {
       const port = (server.address() as any).port;
@@ -45,9 +45,9 @@ function runHandler(args: { hubUrl: string; sessionId: string; nativeEvent: stri
   });
 }
 
-describe('hook-handler binary', () => {
+describe('hook-handler binary — fire-and-forget events', () => {
   it('POSTs the event JSON to the hub', async () => {
-    const hub = await startFakeHub();
+    const hub = await startFakeHub({ respondStatus: 204 });
     const r = await runHandler({
       hubUrl: `http://127.0.0.1:${hub.port}`,
       sessionId: 'sid-test',
@@ -66,7 +66,7 @@ describe('hook-handler binary', () => {
   });
 
   it('exits 0 within 350ms even when hub is slow (250ms timeout)', async () => {
-    const hub = await startFakeHub({ delayMs: 5000 });
+    const hub = await startFakeHub({ delayMs: 5000, respondStatus: 204 });
     const r = await runHandler({
       hubUrl: `http://127.0.0.1:${hub.port}`,
       sessionId: 's', nativeEvent: 'Stop', stdin: '{}',
@@ -93,13 +93,58 @@ describe('hook-handler binary', () => {
     expect(r.code).toBe(0);
   });
 
-  it('emits empty stdout', async () => {
-    const hub = await startFakeHub();
+  it('emits empty stdout for non-PreToolUse events', async () => {
+    const hub = await startFakeHub({ respondStatus: 204 });
     const r = await runHandler({
       hubUrl: `http://127.0.0.1:${hub.port}`,
       sessionId: 's', nativeEvent: 'Stop', stdin: '{}',
     });
     hub.close();
     expect(r.stdout).toBe('');
+  });
+});
+
+describe('hook-handler binary — PreToolUse approval flow', () => {
+  it('forwards the hub\'s decision JSON unchanged to stdout', async () => {
+    const decision = {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'remote user said no',
+      },
+    };
+    const hub = await startFakeHub({ respondStatus: 200, respondBody: JSON.stringify(decision) });
+    const r = await runHandler({
+      hubUrl: `http://127.0.0.1:${hub.port}`,
+      sessionId: 's', nativeEvent: 'PreToolUse',
+      stdin: JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls' } }),
+    });
+    hub.close();
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual(decision);
+  });
+
+  it('falls back to "ask" when the hub is unreachable so claude\'s TUI handles it', async () => {
+    const r = await runHandler({
+      hubUrl: 'http://127.0.0.1:1', sessionId: 's', nativeEvent: 'PreToolUse',
+      stdin: JSON.stringify({ tool_name: 'Bash', tool_input: {} }),
+    });
+    expect(r.code).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.hookSpecificOutput.permissionDecision).toBe('ask');
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain('hub unreachable');
+  });
+
+  it('falls back to "ask" when the hub returns malformed JSON', async () => {
+    const hub = await startFakeHub({ respondStatus: 200, respondBody: 'not json' });
+    const r = await runHandler({
+      hubUrl: `http://127.0.0.1:${hub.port}`,
+      sessionId: 's', nativeEvent: 'PreToolUse',
+      stdin: JSON.stringify({ tool_name: 'Bash', tool_input: {} }),
+    });
+    hub.close();
+    expect(r.code).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.hookSpecificOutput.permissionDecision).toBe('ask');
   });
 });
