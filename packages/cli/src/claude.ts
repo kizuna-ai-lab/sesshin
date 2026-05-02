@@ -7,6 +7,7 @@ import { ensureHubRunning } from './hub-spawn.js';
 import { generateHooksOnlySettings } from './settings-tempfile.js';
 import { mergeUserHooksWithOurs } from './settings-merge.js';
 import { wrapPty } from './pty-wrap.js';
+import { startPtyTap } from './pty-tap.js';
 import { startHeartbeat } from './heartbeat.js';
 import { installCleanup } from './cleanup.js';
 import { reapOrphanSettingsFiles } from './orphan-cleanup.js';
@@ -60,14 +61,6 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
 
   const stopHeartbeat = startHeartbeat({ hubUrl: HUB_URL, sessionId });
 
-  installCleanup({
-    tempSettingsPath,
-    onShutdown: async () => {
-      stopHeartbeat();
-      try { await fetch(`${HUB_URL}/api/sessions/${sessionId}`, { method: 'DELETE' }); } catch {}
-    },
-  });
-
   // Spawn claude under PTY with --settings pointing at our temp file.
   const claudeArgs = ['--settings', tempSettingsPath, ...extraArgs];
   const wrap = wrapPty({
@@ -80,7 +73,18 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
     passthrough: true,
   });
 
+  const tap = startPtyTap({ hubUrl: HUB_URL, sessionId });
+  wrap.onData((d) => tap.writeChunk(d));
+
+  installCleanup({
+    tempSettingsPath,
+    onShutdown: async () => {
+      stopHeartbeat();
+      tap.close();
+      try { await fetch(`${HUB_URL}/api/sessions/${sessionId}`, { method: 'DELETE' }); } catch {}
+    },
+  });
+
   // M8 will subscribe to the input bridge for hub→PTY input.
-  // M8 will also tee output to /api/sessions/:id/raw.
   wrap.onExit((code) => process.exit(code));
 }
