@@ -31,7 +31,7 @@ export function parsePolicy(raw: string | undefined): ApprovalGatePolicy {
 
 export function shouldGatePreToolUse(
   raw: Record<string, unknown>,
-  knownMode: PermissionMode | null,
+  knownMode: PermissionMode | undefined,
   policy: ApprovalGatePolicy,
 ): boolean {
   if (policy === 'disabled') return false;

@@ -135,7 +135,7 @@ export async function startHub(): Promise<HubInstance> {
       // silent. Claude then follows its normal mode logic and the user
       // sees no extra prompts.
       const session = registry.get(env.sessionId);
-      const knownMode = session?.substate.permissionMode ?? null;
+      const knownMode = session?.substate.permissionMode;
       if (!shouldGatePreToolUse(env.raw, knownMode, approvalGate)) return null;
       const tool = typeof env.raw['tool_name'] === 'string' ? env.raw['tool_name'] : 'unknown';
       const toolInput = env.raw['tool_input'] ?? null;
