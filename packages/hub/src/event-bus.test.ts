@@ -19,4 +19,16 @@ describe('EventBus', () => {
     bus.emit({ sessionId: 's1', kind: 'user-prompt', payload: {}, source: 'observer:hook-ingest', ts: 1, eventId: 'e1' });
     expect(seen).toEqual([]);
   });
+  it('eventsSince(sessionId, null) returns all recent', () => {
+    const bus = new EventBus();
+    bus.emit({ eventId: 'e1', sessionId: 's', kind: 'tool-call', payload: {}, source: 'observer:hook-ingest', ts: 1 });
+    bus.emit({ eventId: 'e2', sessionId: 's', kind: 'tool-result', payload: {}, source: 'observer:hook-ingest', ts: 2 });
+    expect(bus.eventsSince('s', null)).toHaveLength(2);
+  });
+  it('eventsSince filters strictly after the given id', () => {
+    const bus = new EventBus();
+    bus.emit({ eventId: 'e1', sessionId: 's', kind: 'tool-call', payload: {}, source: 'observer:hook-ingest', ts: 1 });
+    bus.emit({ eventId: 'e2', sessionId: 's', kind: 'tool-result', payload: {}, source: 'observer:hook-ingest', ts: 2 });
+    expect(bus.eventsSince('s', 'e1').map((e) => e.eventId)).toEqual(['e2']);
+  });
 });

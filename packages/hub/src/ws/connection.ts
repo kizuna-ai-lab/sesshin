@@ -109,7 +109,14 @@ function handleUpstream(state: ConnectionState, msg: any, deps: WsServerDeps): v
     if (state.capabilities.has('state')) {
       state.ws.send(JSON.stringify({ type: 'session.list', sessions: deps.registry.list() }));
     }
-    // (since-replay handled in T37.)
+    if (msg.since && state.capabilities.has('events')) {
+      const sids = state.subscribedTo === 'all' ? deps.registry.list().map((s) => s.id) : Array.from(state.subscribedTo);
+      for (const sid of sids) {
+        for (const e of deps.bus.eventsSince(sid, msg.since)) {
+          state.ws.send(JSON.stringify({ type: 'session.event', ...e }));
+        }
+      }
+    }
     return;
   }
   if (msg.type === 'unsubscribe') {
