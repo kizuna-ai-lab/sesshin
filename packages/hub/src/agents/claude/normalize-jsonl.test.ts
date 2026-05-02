@@ -16,4 +16,14 @@ describe('jsonlLineToEvent', () => {
   it('returns null for unparseable lines', () => {
     expect(jsonlLineToEvent('s1', 'not-json')).toBeNull();
   });
+  it('emits agent-internal mode-change event for permission-mode JSONL records', () => {
+    const line = JSON.stringify({ type: 'permission-mode', permissionMode: 'auto', sessionId: 'claude-uuid' });
+    const e = jsonlLineToEvent('s1', line);
+    expect(e).toMatchObject({
+      sessionId: 's1',
+      kind: 'agent-internal',
+      payload: { phase: 'mode-change', mode: 'auto' },
+      source: 'observer:session-file-tail',
+    });
+  });
 });

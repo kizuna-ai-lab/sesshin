@@ -9,6 +9,16 @@ export function jsonlLineToEvent(sessionId: string, line: string): NormalizedEve
   const ts = parseTs(parsed.timestamp);
   const eventId = randomUUID();
 
+  if (parsed.type === 'permission-mode') {
+    const mode = typeof parsed.permissionMode === 'string' ? parsed.permissionMode : 'default';
+    return {
+      eventId, sessionId, ts,
+      kind: 'agent-internal',
+      payload: { phase: 'mode-change', mode },
+      source: 'observer:session-file-tail',
+    };
+  }
+
   if (parsed.type === 'user') {
     // user lines may be plain prompts or tool_result responses (see gate 2 §12.2)
     const content = parsed.message?.content;

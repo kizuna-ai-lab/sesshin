@@ -45,4 +45,15 @@ describe('SessionRegistry', () => {
     expect(r.setSessionFilePath('s1', '/y.jsonl')).toBe(false);
     expect(r.setSessionFilePath('missing', '/z.jsonl')).toBe(false);
   });
+  it('setPermissionMode updates substate, emits substate-changed, idempotent on no-op', () => {
+    const r = makeReg();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const events: string[] = [];
+    r.on('substate-changed', (s) => events.push(s.substate.permissionMode));
+    expect(r.setPermissionMode('s1', 'auto')).toBe(true);
+    expect(r.get('s1')?.substate.permissionMode).toBe('auto');
+    expect(r.setPermissionMode('s1', 'auto')).toBe(false); // no-op
+    expect(events).toEqual(['auto']);
+    expect(r.setPermissionMode('missing', 'plan')).toBe(false);
+  });
 });

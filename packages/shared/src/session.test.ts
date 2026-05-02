@@ -14,6 +14,7 @@ describe('session schemas', () => {
       currentTool: null, lastTool: 'Edit', lastFileTouched: '/x',
       lastCommandRun: null, elapsedSinceProgressMs: 0,
       tokensUsedTurn: null, connectivity: 'ok', stalled: false,
+      permissionMode: 'default',
     };
     expect(SubstateSchema.parse(s)).toEqual(s);
   });

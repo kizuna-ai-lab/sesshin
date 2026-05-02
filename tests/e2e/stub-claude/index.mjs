@@ -62,6 +62,7 @@ function writeJsonl(line) { appendFileSync(transcriptPath, JSON.stringify(line) 
 
 const prompt = argv.find((a) => !a.startsWith('-') && a !== settingsPath) ?? 'do a thing';
 fireHook('SessionStart', { hook_event_name: 'SessionStart', session_id: sessionId, transcript_path: transcriptPath, cwd: process.cwd(), source: 'startup' });
+writeJsonl({ type: 'permission-mode', permissionMode: 'default', sessionId });
 writeJsonl({ type: 'user', message: { content: prompt }, timestamp: new Date().toISOString() });
 fireHook('UserPromptSubmit', { hook_event_name: 'UserPromptSubmit', prompt });
 

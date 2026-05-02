@@ -9,6 +9,11 @@ export type SessionState = z.infer<typeof SessionStateEnum>;
 
 export const ConnectivityEnum = z.enum(['ok', 'degraded', 'offline']);
 
+export const PermissionModeEnum = z.enum([
+  'default','auto','acceptEdits','bypassPermissions','dontAsk','plan',
+]);
+export type PermissionMode = z.infer<typeof PermissionModeEnum>;
+
 export const SubstateSchema = z.object({
   currentTool:           z.string().nullable(),
   lastTool:              z.string().nullable(),
@@ -18,6 +23,7 @@ export const SubstateSchema = z.object({
   tokensUsedTurn:        z.number().int().nullable(),
   connectivity:          ConnectivityEnum,
   stalled:               z.boolean(),
+  permissionMode:        PermissionModeEnum.default('default'),
 });
 export type Substate = z.infer<typeof SubstateSchema>;
 

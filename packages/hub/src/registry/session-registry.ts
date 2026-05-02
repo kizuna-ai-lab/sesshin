@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import type { SessionInfo, SessionState, Substate } from '@sesshin/shared';
+import type { PermissionMode, SessionInfo, SessionState, Substate } from '@sesshin/shared';
 
 export interface RegisterInput {
   id: string;
@@ -15,6 +15,7 @@ function defaultSubstate(): Substate {
     currentTool: null, lastTool: null, lastFileTouched: null, lastCommandRun: null,
     elapsedSinceProgressMs: 0, tokensUsedTurn: null,
     connectivity: 'ok', stalled: false,
+    permissionMode: 'default',
   };
 }
 
@@ -77,6 +78,15 @@ export class SessionRegistry extends EventEmitter {
     if (!s) return;
     Object.assign(s.substate, patch);
     this.emit('substate-changed', this.publicView(s));
+  }
+
+  setPermissionMode(id: string, mode: PermissionMode): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    if (s.substate.permissionMode === mode) return false;
+    s.substate.permissionMode = mode;
+    this.emit('substate-changed', this.publicView(s));
+    return true;
   }
 
   setLastSummary(id: string, summaryId: string): void {

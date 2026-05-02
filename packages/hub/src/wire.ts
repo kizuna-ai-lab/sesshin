@@ -8,6 +8,7 @@ import { SessionRegistry } from './registry/session-registry.js';
 import { Checkpoint } from './registry/checkpoint.js';
 import { EventBus } from './event-bus.js';
 import { wireHookIngest } from './observers/hook-ingest.js';
+import { wireJsonlModeTracker } from './observers/jsonl-mode-tracker.js';
 import { wireStateMachine } from './state-machine/applier.js';
 import { Dedup } from './observers/dedup.js';
 import { PtyTap } from './observers/pty-tap.js';
@@ -68,6 +69,7 @@ export async function startHub(): Promise<HubInstance> {
     }
   });
   wireStateMachine({ bus: dedupedBus, registry });
+  wireJsonlModeTracker({ bus, registry });   // NB: use raw bus, not dedupedBus — agent-internal passes dedup but we don't care
 
   // Hook ingest with sessionFilePath fixup. claude's SessionStart hook
   // delivers the real `transcript_path` (a UUID-named JSONL); the CLI
