@@ -1,6 +1,7 @@
 // packages/hub/src/wire.ts
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { log } from './logger.js';
 import { SessionRegistry } from './registry/session-registry.js';
@@ -92,8 +93,11 @@ export async function startHub(): Promise<HubInstance> {
   log.info({ port: config.internalPort }, 'hub REST listening');
 
   // WS server
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = dirname(__filename);
+  const staticDir = join(__dirname, 'web');
   const ws = createWsServer({
-    registry, bus: dedupedBus, tap, staticDir: null,
+    registry, bus: dedupedBus, tap, staticDir,
     onInput: async (sessionId, data, source) => {
       const r = await bridge.deliver(sessionId, data, source);
       return { ok: r.ok, ...(r.reason !== undefined ? { reason: r.reason } : {}) };
