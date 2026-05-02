@@ -8,6 +8,7 @@ import { generateHooksOnlySettings } from './settings-tempfile.js';
 import { mergeUserHooksWithOurs } from './settings-merge.js';
 import { wrapPty } from './pty-wrap.js';
 import { startPtyTap } from './pty-tap.js';
+import { startInjectListener } from './inject-listener.js';
 import { startHeartbeat } from './heartbeat.js';
 import { installCleanup } from './cleanup.js';
 import { reapOrphanSettingsFiles } from './orphan-cleanup.js';
@@ -76,15 +77,21 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
   const tap = startPtyTap({ hubUrl: HUB_URL, sessionId });
   wrap.onData((d) => tap.writeChunk(d));
 
+  const inject = startInjectListener({
+    hubUrl: HUB_URL,
+    sessionId,
+    onInput: (data, _src) => wrap.write(data),
+  });
+
   installCleanup({
     tempSettingsPath,
     onShutdown: async () => {
       stopHeartbeat();
       tap.close();
+      inject.close();
       try { await fetch(`${HUB_URL}/api/sessions/${sessionId}`, { method: 'DELETE' }); } catch {}
     },
   });
 
-  // M8 will subscribe to the input bridge for hub→PTY input.
   wrap.onExit((code) => process.exit(code));
 }
