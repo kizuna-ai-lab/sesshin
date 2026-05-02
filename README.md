@@ -137,6 +137,38 @@ without handling credentials.
 - [State machine](docs/state-machine.md) — session states and transitions
 - [Summarizer](docs/summarizer.md) — trigger, subprocess approach, diff strategy
 
+## Run (developer preview)
+
+Requires Node 22+, pnpm 9+, a working `claude` binary on PATH, and an
+active Claude.ai login (`claude /login`).
+
+```bash
+pnpm install
+pnpm build
+pnpm e2e            # offline e2e using stub-claude (no API spend)
+
+# Real run:
+packages/cli/bin/sesshin claude
+# Then open http://127.0.0.1:9662 in a browser.
+```
+
+## Settings-merge fallback
+
+In rare cases (verification gate 1 in `docs/validation-log.md` revealed
+this is necessary on your install), set:
+
+```
+export SESSHIN_MERGE_USER_HOOKS=1
+```
+
+before running `sesshin claude`. The CLI will read your existing
+`~/.claude/settings.json` hooks and compose them with Sesshin's into the
+per-session temp file. User-visible behavior is unchanged.
+
+## Log file
+
+The hub writes to `~/.cache/sesshin/hub.log`. Tail it for diagnostics.
+
 ## License
 
 MIT (placeholder; to be confirmed before first release).
