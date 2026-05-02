@@ -1,7 +1,7 @@
 // packages/debug-web/src/ws-client.ts
 import {
   connected, sessions, upsertSession, removeSession,
-  addSummary, addEvent, lastEventId,
+  addSummary, addEvent, appendRaw, lastEventId,
 } from './store.js';
 import type { Action } from '@sesshin/shared';
 
@@ -54,6 +54,7 @@ function handleFrame(m: any): void {
     }
     case 'session.summary': addSummary(m); return;
     case 'session.event':   addEvent(m); return;
-    // raw and attention are accepted but not rendered yet (T64).
+    case 'session.raw':     appendRaw(m.sessionId, m.data); return;
+    // attention is accepted but not rendered yet (T64).
   }
 }

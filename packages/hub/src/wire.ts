@@ -40,6 +40,13 @@ export async function startHub(): Promise<HubInstance> {
 
   // Restore from checkpoint (best-effort).
   for (const r of checkpoint.load().sessions) {
+    // Verify the original CLI process is still alive.
+    let alive = false;
+    try { process.kill(r.pid, 0); alive = true; } catch { alive = false; }
+    if (!alive) {
+      log.info({ id: r.id, pid: r.pid }, 'skipping dead session on restore');
+      continue;
+    }
     try {
       registry.register({
         id: r.id, name: r.name, agent: r.agent, cwd: r.cwd, pid: r.pid,
@@ -106,6 +113,28 @@ export async function startHub(): Promise<HubInstance> {
   await ws.listen(config.publicPort, config.publicHost);
   log.info({ port: config.publicPort }, 'hub WS listening');
 
+  // Broadcast PTY raw output to WS clients with the `raw` capability.
+  const rawSubscriptions = new Map<string, () => void>();
+  const subscribeRaw = (sessionId: string): void => {
+    if (rawSubscriptions.has(sessionId)) return;
+    const off = tap.subscribe(sessionId, (chunk, seq) => {
+      ws.broadcast({
+        type: 'session.raw',
+        sessionId,
+        seq,
+        data: chunk.toString('utf-8'),
+      });
+    });
+    rawSubscriptions.set(sessionId, off);
+  };
+  const unsubscribeRaw = (sessionId: string): void => {
+    const off = rawSubscriptions.get(sessionId);
+    if (off) { off(); rawSubscriptions.delete(sessionId); }
+  };
+  registry.on('session-added', (info) => subscribeRaw(info.id));
+  registry.on('session-removed', (id) => unsubscribeRaw(id));
+  for (const s of registry.list()) subscribeRaw(s.id);
+
   // Summarizer trigger (T46): Stop → Mode B' → broadcast session.summary
   const useHeuristic = process.env['SESSHIN_SUMMARIZER'] === 'heuristic';
   const summarizer = useHeuristic
@@ -129,6 +158,7 @@ export async function startHub(): Promise<HubInstance> {
   return {
     rest, ws, registry, bus, tap, bridge,
     shutdown: async () => {
+      for (const off of rawSubscriptions.values()) off();
       for (const s of stopTails.values()) s();
       checkpoint.stop();
       await ws.close();
