@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import type { SessionRegistry } from '../registry/session-registry.js';
 import type { EventBus } from '../event-bus.js';
 import type { PtyTap } from '../observers/pty-tap.js';
-import { handleConnection } from './connection.js';
+import { handleConnection, type BroadcastTarget } from './connection.js';
 
 export interface WsServerDeps {
   registry: SessionRegistry;
@@ -33,10 +33,25 @@ const MIME: Record<string, string> = {
   '.ico':  'image/x-icon',
 };
 
+function capabilityRequiredFor(msgType: string): string | null {
+  switch (msgType) {
+    case 'session.summary':   return 'summary';
+    case 'session.raw':       return 'raw';
+    case 'session.event':     return 'events';
+    case 'session.attention': return 'attention';
+    case 'session.state':
+    case 'session.list':
+    case 'session.added':
+    case 'session.removed':   return 'state';
+    default:                  return null;
+  }
+}
+
 export function createWsServer(deps: WsServerDeps): WsServerInstance {
   const http = createServer((req, res) => serveHttp(req, res, deps));
   const wss = new WebSocketServer({ noServer: true });
   const sockets = new Set<WebSocket>();
+  const targets = new Map<WebSocket, BroadcastTarget>();
 
   http.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://x');
@@ -47,8 +62,8 @@ export function createWsServer(deps: WsServerDeps): WsServerInstance {
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
       sockets.add(ws);
-      ws.on('close', () => sockets.delete(ws));
-      handleConnection(ws, deps);
+      ws.on('close', () => { sockets.delete(ws); targets.delete(ws); });
+      handleConnection(ws, deps, (target) => targets.set(ws, target));
     });
   });
 
@@ -62,11 +77,15 @@ export function createWsServer(deps: WsServerDeps): WsServerInstance {
       wss.close(() => http.close(() => resolve()));
     }),
     address: () => http.address() as AddressInfo,
-    broadcast: (msg, _filter) => {
+    broadcast: (msg) => {
       const data = JSON.stringify(msg);
-      for (const ws of sockets) {
-        // (filter is applied per-connection in T36 once capabilities are stored on the connection.)
-        if ((ws as unknown as { readyState: number }).readyState === 1) ws.send(data);
+      const requiredCap = capabilityRequiredFor((msg as any).type);
+      const sessionId = (msg as any).sessionId as string | undefined;
+      for (const [ws, target] of targets) {
+        if ((ws as unknown as { readyState: number }).readyState !== 1) continue;
+        if (requiredCap && !target.caps().has(requiredCap)) continue;
+        if (sessionId && !target.subscribed(sessionId)) continue;
+        ws.send(data);
       }
     },
   };
