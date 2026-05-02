@@ -21,4 +21,9 @@ describe('Dedup', () => {
     expect(d.shouldEmit({ sessionId: 's1', kind: 'agent-internal', ts: 1000, source: 'observer:hook-ingest' })).toBe(true);
     expect(d.shouldEmit({ sessionId: 's1', kind: 'agent-internal', ts: 1500, source: 'observer:session-file-tail' })).toBe(true);
   });
+  it('does NOT suppress agent-output across sources (Stop hook + JSONL assistant carry distinct info)', () => {
+    const d = new Dedup({ windowMs: 2000 });
+    expect(d.shouldEmit({ sessionId: 's1', kind: 'agent-output', ts: 1000, source: 'observer:hook-ingest' })).toBe(true);
+    expect(d.shouldEmit({ sessionId: 's1', kind: 'agent-output', ts: 1200, source: 'observer:session-file-tail' })).toBe(true);
+  });
 });
