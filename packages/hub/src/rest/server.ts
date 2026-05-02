@@ -37,12 +37,14 @@ export interface RestServer {
 }
 
 const RegisterBody = z.object({
-  id:              z.string(),
-  name:            z.string(),
-  agent:           z.enum(['claude-code', 'codex', 'gemini', 'other']),
-  cwd:             z.string(),
-  pid:             z.number().int(),
-  sessionFilePath: z.string(),
+  id:                    z.string(),
+  name:                  z.string(),
+  agent:                 z.enum(['claude-code', 'codex', 'gemini', 'other']),
+  cwd:                   z.string(),
+  pid:                   z.number().int(),
+  sessionFilePath:       z.string(),
+  initialPermissionMode: z.enum(['default','auto','acceptEdits','bypassPermissions','dontAsk','plan']).optional(),
+  claudeAllowRules:      z.array(z.string()).optional(),
 });
 
 const InjectBody = z.object({ data: z.string(), source: z.string() });
@@ -215,6 +217,12 @@ async function registerSession(req: IncomingMessage, res: ServerResponse, deps: 
   if (!parsed.success) return void res.writeHead(400, { 'content-type': 'application/json' })
                                .end(JSON.stringify({ error: parsed.error.format() }));
   const rec = deps.registry.register(parsed.data);
+  if (parsed.data.initialPermissionMode) {
+    deps.registry.setPermissionMode(rec.id, parsed.data.initialPermissionMode);
+  }
+  if (parsed.data.claudeAllowRules) {
+    deps.registry.setClaudeAllowRules(rec.id, parsed.data.claudeAllowRules);
+  }
   res.writeHead(201, { 'content-type': 'application/json' })
      .end(JSON.stringify({ id: rec.id, registeredAt: rec.startedAt }));
 }

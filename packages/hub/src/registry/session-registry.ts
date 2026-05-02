@@ -30,6 +30,8 @@ export interface SessionRecord extends SessionInfo {
   sessionFilePath: string;
   fileTailCursor: number;
   lastHeartbeat: number;
+  claudeAllowRules: string[];
+  sessionAllowList: string[];
 }
 
 export class SessionRegistry extends EventEmitter {
@@ -49,6 +51,8 @@ export class SessionRegistry extends EventEmitter {
       sessionFilePath: input.sessionFilePath,
       fileTailCursor: 0,
       lastHeartbeat: Date.now(),
+      claudeAllowRules: [],
+      sessionAllowList: [],
     };
     this.sessions.set(rec.id, rec);
     this.emit('session-added', this.publicView(rec));
@@ -89,6 +93,13 @@ export class SessionRegistry extends EventEmitter {
     return true;
   }
 
+  setClaudeAllowRules(id: string, rules: string[]): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    s.claudeAllowRules = [...rules];
+    return true;
+  }
+
   setLastSummary(id: string, summaryId: string): void {
     const s = this.sessions.get(id);
     if (s) s.lastSummaryId = summaryId;
@@ -122,7 +133,11 @@ export class SessionRegistry extends EventEmitter {
   }
 
   private publicView(s: SessionRecord): SessionInfo {
-    const { sessionFilePath: _f, fileTailCursor: _c, lastHeartbeat: _h, ...pub } = s;
+    const {
+      sessionFilePath: _f, fileTailCursor: _c, lastHeartbeat: _h,
+      claudeAllowRules: _a, sessionAllowList: _l,
+      ...pub
+    } = s;
     return pub;
   }
 

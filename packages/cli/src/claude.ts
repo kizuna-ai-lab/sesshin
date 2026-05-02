@@ -13,6 +13,8 @@ import { startHeartbeat } from './heartbeat.js';
 import { installCleanup } from './cleanup.js';
 import { reapOrphanSettingsFiles } from './orphan-cleanup.js';
 import { sessionFilePath } from '@sesshin/hub/agents/claude/session-file-path';
+import { readClaudeSettings } from './read-claude-settings.js';
+import { parsePermissionModeFlag } from './parse-permission-mode-flag.js';
 
 const HUB_PORT = Number(process.env['SESSHIN_INTERNAL_PORT'] ?? 9663);
 const HUB_URL  = `http://127.0.0.1:${HUB_PORT}`;
@@ -54,9 +56,17 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
   // Register
   const cwd = process.cwd();
   const sfp = sessionFilePath({ home: homedir(), cwd, sessionId });
+  const claudeSettings = readClaudeSettings({ home: homedir(), cwd });
+  const initialPermissionMode =
+    parsePermissionModeFlag(extraArgs) ?? claudeSettings.defaultMode ?? 'default';
   const reg = await fetch(`${HUB_URL}/api/sessions`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ id: sessionId, name: `claude (${cwd})`, agent: 'claude-code', cwd, pid: process.pid, sessionFilePath: sfp }),
+    body: JSON.stringify({
+      id: sessionId, name: `claude (${cwd})`, agent: 'claude-code', cwd,
+      pid: process.pid, sessionFilePath: sfp,
+      initialPermissionMode,
+      claudeAllowRules: claudeSettings.allowRules,
+    }),
   });
   if (!reg.ok) throw new Error(`hub registration failed: ${reg.status}`);
 
