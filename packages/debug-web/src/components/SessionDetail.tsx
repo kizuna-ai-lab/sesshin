@@ -1,10 +1,11 @@
 import { selectedSession, summariesBySession, eventsBySession, rawBySession } from '../store.js';
 import { StateBadge } from './StateBadge.js';
+import { ModeBadge } from './ModeBadge.js';
 import { SummaryCard } from './SummaryCard.js';
 import { EventTimeline } from './EventTimeline.js';
 import { ActionButtons } from './ActionButtons.js';
 import { TextInput } from './TextInput.js';
-// import { ConfirmationPanel } from './ConfirmationPanel.js';   // replaced in Task 8
+import { InteractionPanel } from './InteractionPanel.js';
 import type { WsClient } from '../ws-client.js';
 
 function stripAnsi(s: string): string {
@@ -22,9 +23,10 @@ export function SessionDetail({ ws }: { ws: WsClient }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
         <h2 style={{ margin: 0 }}>{s.name}</h2>
         <StateBadge state={s.state} />
+        <ModeBadge mode={s.substate.permissionMode} />
       </div>
       <SummaryCard summary={summaries[0] ?? null} />
-      {/* <ConfirmationPanel ws={ws} sessionId={s.id} />               // replaced in Task 8 */}
+      <InteractionPanel ws={ws} sessionId={s.id} />
       <ActionButtons ws={ws} sessionId={s.id} />
       <TextInput ws={ws} sessionId={s.id} />
       <h3>Event timeline</h3>
