@@ -36,10 +36,14 @@ fireHook('UserPromptSubmit', { hook_event_name: 'UserPromptSubmit', prompt });
 setTimeout(() => {
   fireHook('PreToolUse',  { hook_event_name: 'PreToolUse',  tool_name: 'Read', tool_input: { path: '/etc/hosts' } });
   fireHook('PostToolUse', { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_response: 'localhost' });
+  // Write an assistant line before prompting so the state machine moves out of `running`.
+  writeJsonl({ type: 'assistant', message: { content: 'I will respond now. Confirm? (y/n)' }, timestamp: new Date().toISOString() });
   process.stdout.write('I will respond now. Confirm? (y/n) ');
   process.stdin.once('data', (buf) => {
     const got = buf.toString().trim();
-    writeJsonl({ type: 'assistant', message: { content: `You said: ${got}` }, timestamp: new Date().toISOString() });
+    const reply = `You said: ${got}`;
+    process.stdout.write(`\n${reply}\n`);
+    writeJsonl({ type: 'assistant', message: { content: reply }, timestamp: new Date().toISOString() });
     fireHook('Stop', { hook_event_name: 'Stop', stop_reason: 'end_turn' });
     fireHook('SessionEnd', { hook_event_name: 'SessionEnd' });
     process.exit(0);
