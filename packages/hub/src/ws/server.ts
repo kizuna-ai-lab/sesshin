@@ -78,7 +78,7 @@ export function createWsServer(deps: WsServerDeps): WsServerInstance {
     const next = cur + delta;
     if (next <= 0) actionsBySession.delete(sessionId);
     else actionsBySession.set(sessionId, next);
-    if (delta === -1 && next <= 0) deps.onLastActionsClientGone?.(sessionId);
+    if (delta === -1 && cur > 0 && next <= 0) deps.onLastActionsClientGone?.(sessionId);
   }
 
   http.on('upgrade', (req, socket, head) => {
