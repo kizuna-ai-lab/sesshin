@@ -20,6 +20,7 @@ import { runModeBPrime } from './summarizer/mode-b-prime.js';
 import { runModeB } from './summarizer/mode-b.js';
 import { wireSummarizerTrigger } from './summarizer-trigger.js';
 import { ApprovalManager } from './approval-manager.js';
+import { parsePolicy, shouldGatePreToolUse } from './agents/claude/approval-policy.js';
 
 export interface HubInstance {
   rest: RestServer;
@@ -112,6 +113,8 @@ export async function startHub(): Promise<HubInstance> {
   const approvals = new ApprovalManager({
     defaultTimeoutMs: Number(process.env['SESSHIN_APPROVAL_TIMEOUT_MS'] ?? 60_000),
   });
+  const approvalGate = parsePolicy(process.env['SESSHIN_APPROVAL_GATE']);
+  log.info({ approvalGate }, 'PreToolUse approval gate policy');
 
   // Forward declaration for ws so the REST onPreToolUseApproval closure can
   // reach the broadcaster. Filled in immediately after createWsServer below.
@@ -124,6 +127,12 @@ export async function startHub(): Promise<HubInstance> {
     onAttachSink: (id, deliver) => { bridge.setSink(id, deliver); },
     onDetachSink: (id) => { bridge.clearSink(id); },
     onPreToolUseApproval: async (env) => {
+      // Mode-aware gating: when claude wouldn't have prompted on its own
+      // (auto / acceptEdits / bypassPermissions / read-only tool), return
+      // null so the REST layer responds 204 and the hook handler stays
+      // silent. Claude then follows its normal mode logic and the user
+      // sees no extra prompts.
+      if (!shouldGatePreToolUse(env.raw, approvalGate)) return null;
       const tool = typeof env.raw['tool_name'] === 'string' ? env.raw['tool_name'] : 'unknown';
       const toolInput = env.raw['tool_input'] ?? null;
       const toolUseId = typeof env.raw['tool_use_id'] === 'string' ? env.raw['tool_use_id'] : undefined;

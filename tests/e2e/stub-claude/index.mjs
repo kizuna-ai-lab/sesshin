@@ -66,12 +66,14 @@ writeJsonl({ type: 'user', message: { content: prompt }, timestamp: new Date().t
 fireHook('UserPromptSubmit', { hook_event_name: 'UserPromptSubmit', prompt });
 
 setTimeout(() => {
-  const decision = fireHook('PreToolUse', { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { path: '/etc/hosts' }, tool_use_id: 'toolu_stub_1' });
+  // Use Bash with permission_mode=default so the gate triggers (Read would
+  // be auto-allowed by the policy and skip the approval flow entirely).
+  const decision = fireHook('PreToolUse', { hook_event_name: 'PreToolUse', permission_mode: 'default', tool_name: 'Bash', tool_input: { command: 'echo hi' }, tool_use_id: 'toolu_stub_1' });
   if (decision === 'deny') {
-    fireHook('PostToolUse', { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_response: 'denied by remote approver' });
+    fireHook('PostToolUse', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_response: 'denied by remote approver' });
   } else {
     // 'allow' or 'ask' (laptop TUI auto-approves the stub).
-    fireHook('PostToolUse', { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_response: 'localhost' });
+    fireHook('PostToolUse', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_response: 'hi' });
   }
   // Write an assistant line before prompting so the state machine moves out of `running`.
   writeJsonl({ type: 'assistant', message: { content: 'I will respond now. Confirm? (y/n)' }, timestamp: new Date().toISOString() });

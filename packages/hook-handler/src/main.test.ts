@@ -147,4 +147,19 @@ describe('hook-handler binary — PreToolUse approval flow', () => {
     const out = JSON.parse(r.stdout);
     expect(out.hookSpecificOutput.permissionDecision).toBe('ask');
   });
+
+  it('emits empty stdout when the hub passes through with 204 (auto mode / non-gated tool)', async () => {
+    // Critical: claude must follow its normal mode logic in this case.
+    // ANY JSON output (even "ask") would override that logic and produce
+    // an unwanted prompt in auto / acceptEdits / bypassPermissions mode.
+    const hub = await startFakeHub({ respondStatus: 204 });
+    const r = await runHandler({
+      hubUrl: `http://127.0.0.1:${hub.port}`,
+      sessionId: 's', nativeEvent: 'PreToolUse',
+      stdin: JSON.stringify({ permission_mode: 'auto', tool_name: 'Read', tool_input: { path: '/etc/hosts' } }),
+    });
+    hub.close();
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe('');
+  });
 });

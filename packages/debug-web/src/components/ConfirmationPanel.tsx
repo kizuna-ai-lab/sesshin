@@ -29,7 +29,8 @@ function Row({ ws, c }: { ws: WsClient; c: PendingConfirmation }) {
         <button data-testid="confirmation-deny" onClick={() => ws.sendConfirmation(c.sessionId, c.requestId, 'deny', 'remote-web denied')}
                 style={{ padding: '4px 12px', background: '#5f1f1f', color: '#eee', border: '1px solid #7a2f2f' }}>Deny</button>
         <button data-testid="confirmation-ask"  onClick={() => ws.sendConfirmation(c.sessionId, c.requestId, 'ask', 'remote-web deferred to laptop')}
-                style={{ padding: '4px 12px', background: '#222', color: '#aaa', border: '1px solid #444' }}>Defer to laptop</button>
+                title="Don't decide here. Claude will fall back to its own TUI permission menu on the laptop, where you (or whoever is at the keyboard) can answer."
+                style={{ padding: '4px 12px', background: '#222', color: '#aaa', border: '1px solid #444' }}>Ask on laptop</button>
       </div>
     </div>
   );
