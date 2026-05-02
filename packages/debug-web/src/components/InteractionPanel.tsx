@@ -21,6 +21,17 @@ function Card({ ws, c }: { ws: WsClient; c: PendingPromptRequest }) {
     ws.sendPromptResponse(c.sessionId, c.requestId, answers);
   };
 
+  function canSubmit(): boolean {
+    for (let i = 0; i < c.questions.length; i += 1) {
+      const q = c.questions[i]!;
+      const hasSelection = (selected[i]?.size ?? 0) > 0;
+      const hasFreeText = (freeText[i]?.length ?? 0) > 0;
+      if (!q.allowFreeText && !hasSelection) return false;
+      if (q.allowFreeText && !hasSelection && !hasFreeText) return false;
+    }
+    return true;
+  }
+
   // Single-select shortcut: clicking an option picks it AND submits immediately
   const clickOption = (qIdx: number, key: string, multiSelect: boolean) => {
     if (multiSelect) {
@@ -86,7 +97,16 @@ function Card({ ws, c }: { ws: WsClient; c: PendingPromptRequest }) {
         </div>
       ))}
       {(c.questions.length > 1 || c.questions.some(q => q.multiSelect)) && (
-        <button onClick={submit} style={{ marginTop: 6, padding: '4px 12px', background: '#1f5f2e', color: '#eee' }}>Submit</button>
+        <button
+          onClick={submit}
+          disabled={!canSubmit()}
+          style={{
+            marginTop: 6, padding: '4px 12px',
+            background: canSubmit() ? '#1f5f2e' : '#444',
+            color: canSubmit() ? '#eee' : '#888',
+            cursor: canSubmit() ? 'pointer' : 'not-allowed',
+          }}
+        >Submit</button>
       )}
     </div>
   );
