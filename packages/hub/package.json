@@ -4,6 +4,14 @@
   "type": "module",
   "private": true,
   "bin": { "sesshin-hub": "bin/sesshin-hub" },
+  "exports": {
+    ".": { "types": "./dist/main.d.ts", "import": "./dist/main.js" },
+    "./agents/claude/session-file-path": {
+      "types": "./dist/agents/claude/session-file-path.d.ts",
+      "import": "./dist/agents/claude/session-file-path.js"
+    },
+    "./bin/sesshin-hub": "./bin/sesshin-hub"
+  },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
