@@ -5,7 +5,7 @@
   "private": true,
   "bin": { "sesshin": "bin/sesshin" },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && mkdir -p dist/commands-bundle && cp -r src/commands-bundle/*.md dist/commands-bundle/",
     "dev": "tsup --watch",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest"

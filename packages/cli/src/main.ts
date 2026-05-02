@@ -2,6 +2,8 @@ import { runClaude } from './claude.js';
 import { runStatus } from './subcommands/status.js';
 import { runClients } from './subcommands/clients.js';
 import { runHistory } from './subcommands/history.js';
+import { runCommandsInstall } from './subcommands/commands-install.js';
+import { runCommandsUninstall } from './subcommands/commands-uninstall.js';
 
 async function main(): Promise<number | null> {
   const [cmd, ...rest] = process.argv.slice(2);
@@ -28,8 +30,15 @@ async function main(): Promise<number | null> {
       const nStr = pickFlag(rest, '-n');
       return runHistory({ sessionId: sid, ...(nStr ? { n: Number(nStr) } : {}), json: rest.includes('--json') });
     }
+    case 'commands': {
+      const sub = rest[0];
+      if (sub === 'install')   return runCommandsInstall();
+      if (sub === 'uninstall') return runCommandsUninstall();
+      process.stderr.write('usage: sesshin commands <install|uninstall>\n');
+      return 2;
+    }
     default:
-      process.stderr.write(`usage: sesshin <claude|status|clients|history> ...\n`);
+      process.stderr.write(`usage: sesshin <claude|status|clients|history|commands> ...\n`);
       return 2;
   }
 }
