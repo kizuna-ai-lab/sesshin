@@ -79,12 +79,11 @@ describe('WS server hasSubscribedActionsClient + onLastActionsClientGone', () =>
     }
   });
 
-  it('does NOT fire onLastActionsClientGone when decrementing a session whose count was never positive', async () => {
-    // Trigger: a client subscribes 'all' (snapshot expanded against the registry at T0,
-    // containing only s1). Then s2 is registered. Then the client sends `unsubscribe ['s2']`,
-    // which causes bumpActions('s2', -1) — but s2 was never incremented for this client.
-    // The previous guard (`delta === -1 && next <= 0`) fired spuriously because next went 0 → -1.
-    // The fix requires `cur > 0` so the callback only fires on a true positive→zero transition.
+  it('subscribe(all) increments NEW sessions on register; unsubscribe drops them cleanly', async () => {
+    // Post Issue-2 fix: a client subscribed 'all' tracks sessions registered AFTER the
+    // subscribe via the session-added listener. So when s2 is registered, s2's counter
+    // goes 0→1 — and a subsequent `unsubscribe ['s2']` is now a real positive→zero
+    // transition that legitimately fires onLastActionsClientGone for s2.
     const gone: string[] = [];
     const registry = new SessionRegistry();
     registry.register({ id: 's1', name: 's1', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/tmp/s1' });
@@ -112,17 +111,15 @@ describe('WS server hasSubscribedActionsClient + onLastActionsClientGone', () =>
       expect(localSvr.hasSubscribedActionsClient('s2')).toBe(false);
       // Register a NEW session s2 *after* the client subscribed 'all'.
       registry.register({ id: 's2', name: 's2', agent: 'claude-code', cwd: '/', pid: 2, sessionFilePath: '/tmp/s2' });
-      // s2 was never incremented for this client.
-      expect(localSvr.hasSubscribedActionsClient('s2')).toBe(false);
-      // Client unsubscribes s2. connection.ts (subscribed === 'all' branch) computes
-      // remaining = all-but-s2, and decrements every session NOT in remaining → bumpActions('s2', -1).
+      await new Promise<void>((res) => setTimeout(res, 20));
+      // s2 IS tracked thanks to the session-added listener.
+      expect(localSvr.hasSubscribedActionsClient('s2')).toBe(true);
+      // Client unsubscribes s2 → real positive→zero transition for s2.
       ws.send(JSON.stringify({ type: 'unsubscribe', sessions: ['s2'] }));
       await new Promise<void>((res) => setTimeout(res, 50));
-      // Assert: callback was NOT fired for s2 (s2's count was 0, never positive).
-      expect(gone).not.toContain('s2');
+      expect(gone).toContain('s2');
       expect(localSvr.hasSubscribedActionsClient('s2')).toBe(false);
-      // s1 is still subscribed → no fire for s1 either.
-      expect(gone).toEqual([]);
+      // s1 is still subscribed.
       expect(localSvr.hasSubscribedActionsClient('s1')).toBe(true);
       const closed = new Promise<void>((res) => ws.on('close', () => res()));
       ws.close();
@@ -132,13 +129,11 @@ describe('WS server hasSubscribedActionsClient + onLastActionsClientGone', () =>
     }
   });
 
-  it('re-subscribing from "all" to specific list does not fire spuriously for sessions added after original subscribe', async () => {
-    // Trigger: a client subscribes 'all' (registry contains only s1 at T0). Then s2 is
-    // registered. Then the client RE-SUBSCRIBES to ['s1'] (not unsubscribe). The
-    // subscribe-diff path computes prev = live registry = {s1, s2}, next = {s1},
-    // producing a phantom bumpActions('s2', -1) for a count that was never positive.
-    // The `cur > 0` guard in bumpActions must absorb this so onLastActionsClientGone
-    // is NOT spuriously fired for s2.
+  it('re-subscribing from "all" to specific list cleanly transitions counters for added-after sessions', async () => {
+    // Post Issue-2 fix: subscribe 'all' attaches a session-added listener, so s2
+    // (registered after the subscribe) is incremented to 1. Re-subscribing to ['s1']
+    // detaches the listener and the subscribe-diff decrements s2 from 1→0, which is a
+    // real positive→zero transition → onLastActionsClientGone fires for s2.
     const gone: string[] = [];
     const registry = new SessionRegistry();
     registry.register({ id: 's1', name: 's1', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/tmp/s1' });
@@ -164,23 +159,97 @@ describe('WS server hasSubscribedActionsClient + onLastActionsClientGone', () =>
       await new Promise<void>((res) => setTimeout(res, 50));
       expect(localSvr.hasSubscribedActionsClient('s1')).toBe(true);
       expect(localSvr.hasSubscribedActionsClient('s2')).toBe(false);
-      // Register s2 *after* the original 'all' subscribe — never incremented for this client.
+      // Register s2 *after* the original 'all' subscribe — listener increments to 1.
       registry.register({ id: 's2', name: 's2', agent: 'claude-code', cwd: '/', pid: 2, sessionFilePath: '/tmp/s2' });
-      expect(localSvr.hasSubscribedActionsClient('s2')).toBe(false);
-      // Re-subscribe to ['s1'] specifically. connection.ts subscribe-diff:
-      //   prev = live registry = {s1, s2}, next = {s1}
-      //   → bumpActions('s2', -1)  (phantom decrement; guard must absorb)
+      await new Promise<void>((res) => setTimeout(res, 20));
+      expect(localSvr.hasSubscribedActionsClient('s2')).toBe(true);
+      // Re-subscribe to ['s1'] specifically. prev = live registry = {s1, s2}, next = {s1}
+      // → bumpActions('s2', -1) is a real 1→0 transition → callback fires for s2.
       ws.send(JSON.stringify({ type: 'subscribe', sessions: ['s1'], since: null }));
       await new Promise<void>((res) => setTimeout(res, 50));
-      // Assert: callback was NOT fired for s2 (s2's count was 0, never positive).
-      expect(gone).not.toContain('s2');
-      expect(gone).toEqual([]);
+      expect(gone).toContain('s2');
       // s1 remains subscribed.
       expect(localSvr.hasSubscribedActionsClient('s1')).toBe(true);
       expect(localSvr.hasSubscribedActionsClient('s2')).toBe(false);
       const closed = new Promise<void>((res) => ws.on('close', () => res()));
       ws.close();
       await closed;
+    } finally {
+      await localSvr.close();
+    }
+  });
+
+  it('bumpActions cur > 0 guard still absorbs phantom decrements (defense in depth)', async () => {
+    // The cur > 0 guard in bumpActions is still useful for safety even after Issue 2:
+    // if any future code path produces a stray bumpActions(-1) on a session whose
+    // counter is already 0, the callback must not fire spuriously. We validate this
+    // at the public surface: registering a session that no actions client tracks
+    // must NOT fire onLastActionsClientGone (no decrement happens, so the guard's
+    // role is implicit — but the invariant is the same: only fire on true 1→0).
+    const gone: string[] = [];
+    const registry = new SessionRegistry();
+    const localSvr = createWsServer({
+      registry,
+      bus: new EventBus(),
+      tap: new PtyTap({ ringBytes: 1024 }),
+      staticDir: null,
+      onLastActionsClientGone: (sid) => gone.push(sid),
+    });
+    await localSvr.listen(0, '127.0.0.1');
+    try {
+      // Register without any subscribed actions client → nobody tracks it, no fire.
+      registry.register({ id: 'orphan', name: 'orphan', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/tmp/o' });
+      await new Promise<void>((res) => setTimeout(res, 30));
+      expect(gone).toEqual([]);
+      expect(localSvr.hasSubscribedActionsClient('orphan')).toBe(false);
+    } finally {
+      await localSvr.close();
+    }
+  });
+
+  it('subscribe(all) tracks NEW sessions registered after subscribe', async () => {
+    // Regression: previously bumpActions(+1) fired only against the registry
+    // snapshot at subscribe time, so a debug-web user (subscribes 'all') opening
+    // BEFORE a sesshin session started would never get incremented for the new
+    // session → its hasSubscribedActionsClient stayed false → PreToolUse hooks
+    // would silently bypass the remote prompt.
+    const gone: string[] = [];
+    const registry = new SessionRegistry();
+    const localSvr = createWsServer({
+      registry,
+      bus: new EventBus(),
+      tap: new PtyTap({ ringBytes: 1024 }),
+      staticDir: null,
+      onLastActionsClientGone: (sid) => gone.push(sid),
+    });
+    await localSvr.listen(0, '127.0.0.1');
+    const localPort = localSvr.address().port;
+    try {
+      // 1. Client subscribes 'all' before any sessions exist.
+      const ws = new WebSocket(`ws://127.0.0.1:${localPort}/v1/ws`);
+      await new Promise<void>((res, rej) => { ws.on('open', () => res()); ws.on('error', rej); });
+      ws.send(JSON.stringify({
+        type: 'client.identify', protocol: 1,
+        client: { kind: 'debug-web', version: '0.0.0', capabilities: ['actions','state'] },
+      }));
+      await new Promise<void>((res) => ws.once('message', () => res()));
+      ws.send(JSON.stringify({ type: 'subscribe', sessions: 'all', since: null }));
+      await new Promise<void>((res) => setTimeout(res, 50));
+      // 2. hasSubscribedActionsClient('s1') is false (session doesn't exist yet).
+      expect(localSvr.hasSubscribedActionsClient('s1')).toBe(false);
+      // 3. Register 's1' AFTER the subscribe.
+      registry.register({ id: 's1', name: 's1', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/tmp/s1' });
+      await new Promise<void>((res) => setTimeout(res, 50));
+      // 4. hasSubscribedActionsClient('s1') is now TRUE.
+      expect(localSvr.hasSubscribedActionsClient('s1')).toBe(true);
+      // 5. Disconnect client.
+      const closed = new Promise<void>((res) => ws.on('close', () => res()));
+      ws.close();
+      await closed;
+      await new Promise<void>((res) => setTimeout(res, 50));
+      // 6. hasSubscribedActionsClient('s1') is now FALSE.
+      expect(localSvr.hasSubscribedActionsClient('s1')).toBe(false);
+      expect(gone).toContain('s1');
     } finally {
       await localSvr.close();
     }

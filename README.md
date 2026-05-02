@@ -10,8 +10,10 @@ protocol.
 
 ## Status
 
-Design phase. This repository currently contains design documents only. No
-runtime code yet.
+**v1.5 milestone complete (May 2026).** Mode-aware ambient remote control,
+unified `session.prompt-request` wire shape, per-tool handler registry, REST
+diagnostics + CLI subcommands, bundled slash commands. See `docs/superpowers/specs/`
+for the design history.
 
 ## What Sesshin is
 

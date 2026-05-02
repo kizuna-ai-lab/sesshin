@@ -59,6 +59,26 @@ describe('shouldGatePreToolUse — auto policy', () => {
     }
   });
 
+  it('gates the full v1.5 GATED_TOOLS list in default mode', () => {
+    const tools = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit',
+                   'PowerShell', 'WebFetch', 'AskUserQuestion',
+                   'ExitPlanMode', 'EnterPlanMode', 'Skill'];
+    for (const tool of tools) {
+      expect(shouldGatePreToolUse({ permission_mode: 'default', tool_name: tool }, undefined, 'auto'), `tool=${tool}`).toBe(true);
+    }
+  });
+
+  it('gates mcp__* tools in default mode', () => {
+    expect(shouldGatePreToolUse({ permission_mode: 'default', tool_name: 'mcp__github__createPR' }, undefined, 'auto')).toBe(true);
+    expect(shouldGatePreToolUse({ permission_mode: 'default', tool_name: 'mcp__custom__doStuff' }, undefined, 'auto')).toBe(true);
+  });
+
+  it('does NOT gate non-mcp tools that arent in GATED_TOOLS', () => {
+    expect(shouldGatePreToolUse({ permission_mode: 'default', tool_name: 'Read' }, undefined, 'auto')).toBe(false);
+    expect(shouldGatePreToolUse({ permission_mode: 'default', tool_name: 'Glob' }, undefined, 'auto')).toBe(false);
+    expect(shouldGatePreToolUse({ permission_mode: 'default', tool_name: 'mcpfake' }, undefined, 'auto')).toBe(false);
+  });
+
   it('treats missing permission_mode as default', () => {
     expect(shouldGatePreToolUse({ tool_name: 'Bash' }, undefined, 'auto')).toBe(true);
     expect(shouldGatePreToolUse({ tool_name: 'Read' }, undefined, 'auto')).toBe(false);

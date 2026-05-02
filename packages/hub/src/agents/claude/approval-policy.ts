@@ -25,8 +25,13 @@ const AUTO_EXECUTE_MODES = new Set(['acceptEdits', 'bypassPermissions', 'auto', 
 
 // Tools that typically trigger claude's permission prompt in default mode
 // for a fresh session. Read-only tools (Read/Glob/Grep/LS/Task) are
-// auto-allowed and shouldn't surface a remote approval card.
-const GATED_TOOLS = new Set(['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+// auto-allowed and shouldn't surface a remote approval card. mcp__* tools
+// are matched separately via prefix (see shouldGatePreToolUse).
+const GATED_TOOLS = new Set([
+  'Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit',
+  'PowerShell', 'WebFetch', 'AskUserQuestion', 'ExitPlanMode', 'EnterPlanMode',
+  'Skill',
+]);
 
 export function parsePolicy(raw: string | undefined): ApprovalGatePolicy {
   const v = (raw ?? 'auto').toLowerCase();
@@ -66,5 +71,7 @@ export function shouldGatePreToolUse(
       : {};
   if (ruleMatchesAny(tool, toolInput, allow.sessionAllowList)) return false;
   if (ruleMatchesAny(tool, toolInput, allow.claudeAllowRules))  return false;
-  return GATED_TOOLS.has(tool);
+  if (GATED_TOOLS.has(tool)) return true;
+  if (tool.startsWith('mcp__')) return true;
+  return false;
 }

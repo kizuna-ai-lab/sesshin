@@ -34,15 +34,30 @@ export function handleConnection(
     if (!identified) ws.close(1002, 'no client.identify within 5s');
   }, 5000);
 
+  // While this client is subscribed with `sessions: 'all'` AND has the `actions`
+  // capability, we listen for new sessions registered AFTER the subscribe and
+  // bump their actions-counter. Without this, sessions added later would never
+  // be reflected in `hasSubscribedActionsClient`, so their PreToolUse hooks
+  // would silently bypass the remote prompt.
+  let allSubAddedListener: ((info: { id: string }) => void) | null = null;
+  function detachAllListener(): void {
+    if (allSubAddedListener) {
+      deps.registry.off('session-added', allSubAddedListener as (info: any) => void);
+      allSubAddedListener = null;
+    }
+  }
+
   ws.on('close', () => clearTimeout(identifyTimeout));
   // On socket close, decrement the per-session actions counter for whatever
   // we were subscribed to (so the hub releases pending approvals waiting on
   // a now-departed client). Only relevant when this client had `actions` cap.
   ws.on('close', () => {
+    detachAllListener();
     if (!state.capabilities.has('actions')) return;
-    // Live registry expansion (see subscribe-diff comment below): phantom decrements
-    // for sessions registered after the original 'all' subscribe are absorbed by
-    // bumpActions's cur > 0 guard.
+    // For 'all' subscribers, every session in the live registry was incremented
+    // (originally on subscribe + via the session-added listener for any added
+    // afterwards), so decrementing the live list here is symmetric. The cur > 0
+    // guard in bumpActions remains as defense-in-depth.
     const cur = state.subscribedTo === 'all'
       ? deps.registry.list().map((s) => s.id)
       : Array.from(state.subscribedTo);
@@ -82,7 +97,15 @@ export function handleConnection(
       ws.close();
       return;
     }
-    handleUpstream(state, upstream.data, deps, bumpActions);
+    handleUpstream(state, upstream.data, deps, bumpActions, {
+      attachAllListener: () => {
+        detachAllListener();
+        if (!state.capabilities.has('actions')) return;
+        allSubAddedListener = (info) => bumpActions(info.id, 1);
+        deps.registry.on('session-added', allSubAddedListener as (info: any) => void);
+      },
+      detachAllListener,
+    });
   });
 }
 
@@ -130,6 +153,7 @@ function handleUpstream(
   msg: any,
   deps: WsServerDeps,
   bumpActions: (sessionId: string, delta: 1 | -1) => void,
+  allSub: { attachAllListener: () => void; detachAllListener: () => void },
 ): void {
   if (msg.type === 'subscribe') {
     // Diff prev vs next subscription set, bumping the per-session
@@ -141,11 +165,10 @@ function handleUpstream(
       ? new Set(deps.registry.list().map((s) => s.id))
       : new Set<string>(msg.sessions);
     if (hasActions) {
-      // NB: when state.subscribedTo === 'all', prev is the LIVE registry at re-subscribe
-      // time, not the snapshot at original subscribe time. Sessions registered AFTER the
-      // 'all' subscribe will appear in prev without ever having been incremented for this
-      // client; the resulting phantom -1 decrements are absorbed by bumpActions's
-      // `cur > 0` guard. Same caveat applies to the unsubscribe 'all' branch and close.
+      // When state.subscribedTo === 'all', every session in the LIVE registry was
+      // incremented for this client: either at the original subscribe (snapshot)
+      // or via the session-added listener for sessions added afterwards. So
+      // diffing against the live registry is correct symmetric bookkeeping.
       const prev = state.subscribedTo === 'all'
         ? new Set(deps.registry.list().map((s) => s.id))
         : state.subscribedTo;
@@ -153,6 +176,9 @@ function handleUpstream(
       for (const id of prev) if (!next.has(id)) bumpActions(id, -1);
     }
     state.subscribedTo = msg.sessions === 'all' ? 'all' : new Set(msg.sessions);
+    // If now subscribed 'all', start tracking new sessions; otherwise stop.
+    if (state.subscribedTo === 'all') allSub.attachAllListener();
+    else                              allSub.detachAllListener();
     if (state.capabilities.has('state')) {
       state.ws.send(JSON.stringify({ type: 'session.list', sessions: deps.registry.list() }));
     }
@@ -181,6 +207,8 @@ function handleUpstream(
         for (const id of all) if (!remaining.has(id)) bumpActions(id, -1);
       }
       state.subscribedTo = remaining;
+      // Transitioned from 'all' to an explicit set: stop tracking new sessions.
+      allSub.detachAllListener();
     } else {
       for (const id of msg.sessions) {
         if (state.subscribedTo.has(id)) {
