@@ -74,11 +74,18 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
 
   // Spawn claude under PTY with --settings pointing at our temp file.
   const claudeArgs = ['--settings', tempSettingsPath, ...extraArgs];
+  // Inject sesshin context into the spawned claude's env so its Bash tool
+  // (and any /sesshin-* slash command) can resolve $SESSHIN_SESSION_ID.
+  const childEnv: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    SESSHIN_SESSION_ID: sessionId,
+    SESSHIN_HUB_URL: HUB_URL,
+  };
   const wrap = wrapPty({
     command: process.env['SESSHIN_CLAUDE_BIN'] ?? 'claude',
     args: claudeArgs,
     cwd,
-    env: process.env as Record<string, string>,
+    env: childEnv,
     cols: process.stdout.columns ?? 80,
     rows: process.stdout.rows ?? 24,
     passthrough: true,
