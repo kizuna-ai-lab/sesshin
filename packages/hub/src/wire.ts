@@ -1,4 +1,6 @@
 // packages/hub/src/wire.ts
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { config } from './config.js';
 import { log } from './logger.js';
 import { SessionRegistry } from './registry/session-registry.js';
@@ -12,6 +14,10 @@ import { tailSessionFile } from './observers/session-file-tail.js';
 import { createRestServer, type RestServer } from './rest/server.js';
 import { createWsServer, type WsServerInstance } from './ws/server.js';
 import { InputBridge } from './input-bridge.js';
+import { Summarizer } from './summarizer/index.js';
+import { runModeBPrime } from './summarizer/mode-b-prime.js';
+import { runModeB } from './summarizer/mode-b.js';
+import { wireSummarizerTrigger } from './summarizer-trigger.js';
 
 export interface HubInstance {
   rest: RestServer;
@@ -95,6 +101,26 @@ export async function startHub(): Promise<HubInstance> {
   });
   await ws.listen(config.publicPort, config.publicHost);
   log.info({ port: config.publicPort }, 'hub WS listening');
+
+  // Summarizer trigger (T46): Stop → Mode B' → broadcast session.summary
+  const useHeuristic = process.env['SESSHIN_SUMMARIZER'] === 'heuristic';
+  const summarizer = useHeuristic
+    ? new Summarizer({
+        modeBPrime: () => Promise.reject(new Error('disabled')),
+        modeB:      () => Promise.reject(new Error('disabled')),
+        heuristicTail: (sid) => tap.snapshot(sid).toString('utf-8'),
+      })
+    : new Summarizer({
+        modeBPrime: (req) => runModeBPrime({
+          credentialsPath: join(homedir(), '.claude', '.credentials.json'),
+          prompt: req.prompt, instructions: req.instructions, model: req.model, maxOutputTokens: req.maxOutputTokens,
+        }),
+        modeB: (req) => runModeB({
+          prompt: req.prompt, instructions: req.instructions, model: req.model, timeoutMs: 30_000,
+        }),
+        heuristicTail: (sid) => tap.snapshot(sid).toString('utf-8'),
+      });
+  wireSummarizerTrigger({ bus: dedupedBus, registry, summarizer, broadcast: (m) => ws.broadcast(m) });
 
   return {
     rest, ws, registry, bus, tap, bridge,
