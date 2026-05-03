@@ -6,5 +6,4 @@ describe('actionToInput (claude)', () => {
   it('reject → "n\\r"', () => { expect(actionToInput('reject')).toBe('n\r'); });
   it('continue → "\\r"', () => { expect(actionToInput('continue')).toBe('\r'); });
   it('stop → ESC (\\x1b)', () => { expect(actionToInput('stop')).toBe('\x1b'); });
-  it('retry → "/retry\\r"', () => { expect(actionToInput('retry')).toBe('/retry\r'); });
 });

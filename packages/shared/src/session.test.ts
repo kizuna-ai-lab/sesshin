@@ -23,10 +23,17 @@ describe('session schemas', () => {
   });
 });
 describe('actions', () => {
-  it('accepts the 10 reserved action names', () => {
-    for (const a of ['continue','stop','retry','fix','summarize','details','ignore','snooze','approve','reject']) {
+  it('accepts the four TTY-shortcut action names', () => {
+    for (const a of ['approve','reject','continue','stop']) {
       expect(ActionEnum.parse(a)).toBe(a);
     }
+  });
+  it('rejects names removed in cleanup (broken / no-op in v1.5)', () => {
+    for (const dead of ['retry','fix','summarize','details','ignore','snooze']) {
+      expect(() => ActionEnum.parse(dead)).toThrow();
+    }
+  });
+  it('rejects unknown names', () => {
     expect(() => ActionEnum.parse('detonate')).toThrow();
   });
 });
