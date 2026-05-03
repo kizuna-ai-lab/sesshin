@@ -43,6 +43,56 @@ describe('POST /permission/:sessionId — happy paths', () => {
       },
     });
   });
+  it('returns the allow decision shape with updatedPermissions when callback supplies them', async () => {
+    svr = createRestServer({
+      registry, approvals,
+      onPermissionRequestApproval: async () => ({
+        behavior: 'allow',
+        updatedPermissions: [{ type: 'setMode', destination: 'session', mode: 'acceptEdits' }],
+      }),
+    });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(PERM_BODY()),
+    });
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j).toEqual({
+      hookSpecificOutput: {
+        hookEventName: 'PermissionRequest',
+        decision: {
+          behavior: 'allow',
+          updatedPermissions: [{ type: 'setMode', destination: 'session', mode: 'acceptEdits' }],
+        },
+      },
+    });
+  });
+  it('returns allow with both updatedInput and updatedPermissions when callback supplies both', async () => {
+    svr = createRestServer({
+      registry, approvals,
+      onPermissionRequestApproval: async () => ({
+        behavior: 'allow',
+        updatedInput: { foo: 'bar' },
+        updatedPermissions: [{ type: 'setMode', destination: 'session', mode: 'default' }],
+      }),
+    });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(PERM_BODY()),
+    });
+    const j = await r.json();
+    expect(j.hookSpecificOutput.decision).toEqual({
+      behavior: 'allow',
+      updatedInput: { foo: 'bar' },
+      updatedPermissions: [{ type: 'setMode', destination: 'session', mode: 'default' }],
+    });
+  });
   it('returns the deny decision shape with message', async () => {
     svr = createRestServer({
       registry, approvals,

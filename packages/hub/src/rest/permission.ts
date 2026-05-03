@@ -92,6 +92,7 @@ function sendDecision(res: ServerResponse, decision: PermissionRequestDecision):
           decision: {
             behavior: 'allow' as const,
             ...(decision.updatedInput !== undefined ? { updatedInput: decision.updatedInput } : {}),
+            ...(decision.updatedPermissions !== undefined ? { updatedPermissions: decision.updatedPermissions } : {}),
           },
         },
       }

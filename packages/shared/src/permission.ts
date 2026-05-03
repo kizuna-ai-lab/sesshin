@@ -1,8 +1,28 @@
 import { z } from 'zod';
 
 /**
+ * Subset of Claude Code's PermissionUpdate union — currently only the
+ * `setMode` variant, which is what `allow` decisions use to drive the
+ * post-approval permission mode (e.g. on ExitPlanMode approval, deciding
+ * whether the session resumes in `default` or `acceptEdits`).
+ *
+ * Schema mirrors Claude Code's PermissionUpdateSchema (src/types/permissions.ts
+ * in the CC source). Other variants (addRules, addDirectories, …) intentionally
+ * not implemented until a sesshin handler needs them.
+ */
+export const PermissionUpdate = z.object({
+  type: z.literal('setMode'),
+  destination: z.enum(['session', 'userSettings', 'projectSettings', 'localSettings', 'cliArg']),
+  mode: z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk']),
+});
+export type PermissionUpdate = z.infer<typeof PermissionUpdate>;
+
+/**
  * Claude Code's PermissionRequest decision shape. Discriminated on `behavior`:
- * - `allow` may carry `updatedInput` (replaces tool_input on execution)
+ * - `allow` may carry `updatedInput` (replaces tool_input on execution) and/or
+ *   `updatedPermissions` (e.g. setMode to switch out of plan mode into
+ *   default vs acceptEdits — the only way for a hook-approved ExitPlanMode
+ *   to pin the post-exit mode; without it CC falls back to prePlanMode).
  * - `deny`  may carry `message` (surfaced to the user / model)
  *
  * The discriminated union forbids `message` on allow and `updatedInput` on
@@ -12,6 +32,7 @@ export const PermissionRequestDecision = z.discriminatedUnion('behavior', [
   z.object({
     behavior: z.literal('allow'),
     updatedInput: z.record(z.unknown()).optional(),
+    updatedPermissions: z.array(PermissionUpdate).optional(),
   }),
   z.object({
     behavior: z.literal('deny'),

@@ -25,6 +25,7 @@ import { ApprovalManager } from './approval-manager.js';
 import { parsePolicy, shouldGatePreToolUse } from './agents/claude/approval-policy.js';
 import { getHandler, setCatchAllToolName } from './agents/claude/tool-handlers/registry.js';
 import type { ToolHandler, HandlerCtx } from './agents/claude/tool-handlers/types.js';
+import type { PermissionUpdate } from '@sesshin/shared';
 
 interface PendingHandlerSlot {
   handler:   ToolHandler;
@@ -34,6 +35,11 @@ interface PendingHandlerSlot {
 }
 const pendingHandlers = new Map<string, PendingHandlerSlot>();
 const pendingUpdatedInput = new Map<string, Record<string, unknown>>();
+// Mirror of pendingUpdatedInput for the PermissionRequest `updatedPermissions`
+// field. Populated by onPromptResponse from the handler's decide() output, read
+// by onPermissionRequestApproval when assembling the wire response. Only used
+// today by ExitPlanMode (setMode→default vs setMode→acceptEdits).
+const pendingUpdatedPermissions = new Map<string, PermissionUpdate[]>();
 
 // Per-session ring of resolved prompt-request decisions. Capped at 100 per
 // session, returned newest-first via historyStore.get(sid, n).
@@ -246,10 +252,13 @@ export async function startHub(): Promise<HubInstance> {
 
       pendingHandlers.set(request.requestId, { handler, ctx, toolInput, tool });
 
-      // Use try/finally so pendingHandlers + pendingUpdatedInput are always
-      // cleaned up — including the stale-cleanup, timeout, and session-end
-      // paths where the resolution doesn't come back through onPromptResponse.
-      // Without this, those paths leaked the slot in the Map indefinitely.
+      // Use try/finally so pendingHandlers + pendingUpdated{Input,Permissions}
+      // are always cleaned up — including the stale-cleanup, timeout, and
+      // session-end paths where the resolution doesn't come back through
+      // onPromptResponse. Without this, those paths leaked map slots
+      // indefinitely. PreToolUse's wire response doesn't carry
+      // updatedPermissions (that's PermissionRequest-only), but cleanup is
+      // still needed in case the same handler set both fields.
       let out: import('./approval-manager.js').ApprovalOutcome;
       let ui: Record<string, unknown> | undefined;
       try {
@@ -261,6 +270,7 @@ export async function startHub(): Promise<HubInstance> {
       } finally {
         pendingHandlers.delete(request.requestId);
         pendingUpdatedInput.delete(request.requestId);
+        pendingUpdatedPermissions.delete(request.requestId);
       }
       return { ...out, ...(ui ? { updatedInput: ui } : {}) };
     },
@@ -318,21 +328,28 @@ export async function startHub(): Promise<HubInstance> {
       // on stale-cleanup / timeout / session-end paths too.
       let out: import('./approval-manager.js').ApprovalOutcome;
       let ui: Record<string, unknown> | undefined;
+      let up: PermissionUpdate[] | undefined;
       try {
         out = await decision;
         registry.updateState(env.sessionId, 'running');
         ui = pendingUpdatedInput.get(request.requestId);
+        up = pendingUpdatedPermissions.get(request.requestId);
       } finally {
         pendingHandlers.delete(request.requestId);
         pendingUpdatedInput.delete(request.requestId);
+        pendingUpdatedPermissions.delete(request.requestId);
       }
 
       // Map ApprovalOutcome → PermissionRequest decision shape:
-      //   allow → { behavior: 'allow', updatedInput? }
+      //   allow → { behavior: 'allow', updatedInput?, updatedPermissions? }
       //   deny  → { behavior: 'deny', message? } (reason becomes message)
       //   ask   → null (passthrough; PermissionRequest has no 'ask' kind)
       if (out.decision === 'allow') {
-        return { behavior: 'allow', ...(ui ? { updatedInput: ui } : {}) };
+        return {
+          behavior: 'allow',
+          ...(ui ? { updatedInput: ui } : {}),
+          ...(up ? { updatedPermissions: up } : {}),
+        };
       }
       if (out.decision === 'deny') {
         return { behavior: 'deny', ...(out.reason !== undefined ? { message: out.reason } : {}) };
@@ -367,6 +384,7 @@ export async function startHub(): Promise<HubInstance> {
       for (const a of pending) {
         pendingHandlers.delete(a.requestId);
         pendingUpdatedInput.delete(a.requestId);
+        pendingUpdatedPermissions.delete(a.requestId);
         wsRef?.broadcast({
           type: 'session.prompt-request.resolved',
           sessionId, requestId: a.requestId, reason: 'cancelled-no-clients',
@@ -415,6 +433,9 @@ export async function startHub(): Promise<HubInstance> {
       if (decision.kind === 'allow' && decision.updatedInput) {
         pendingUpdatedInput.set(requestId, decision.updatedInput);
       }
+      if (decision.kind === 'allow' && decision.updatedPermissions) {
+        pendingUpdatedPermissions.set(requestId, decision.updatedPermissions);
+      }
 
       const ok = approvals.decide(requestId, outcome);
       if (ok) {
@@ -441,6 +462,7 @@ export async function startHub(): Promise<HubInstance> {
     for (const a of approvals.pendingForSession(id)) {
       pendingHandlers.delete(a.requestId);
       pendingUpdatedInput.delete(a.requestId);
+      pendingUpdatedPermissions.delete(a.requestId);
       wsRef?.broadcast({
         type: 'session.prompt-request.resolved',
         sessionId: id, requestId: a.requestId, reason: 'session-ended',

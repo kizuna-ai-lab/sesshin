@@ -1,4 +1,4 @@
-import type { PermissionMode, PromptQuestion } from '@sesshin/shared';
+import type { PermissionMode, PermissionUpdate, PromptQuestion } from '@sesshin/shared';
 
 export interface HandlerCtx {
   permissionMode: PermissionMode;
@@ -22,7 +22,11 @@ export interface RenderOutput {
 export type HookDecision =
   | { kind: 'passthrough' }
   | { kind: 'allow';  updatedInput?: Record<string, unknown>; additionalContext?: string;
-      sessionAllowAdd?: string }
+      sessionAllowAdd?: string;
+      // Permission updates threaded into PermissionRequest's allow.updatedPermissions.
+      // Used today by ExitPlanMode to pin the post-exit mode (default vs acceptEdits)
+      // since CC's prePlanMode fallback otherwise picks the mode for us.
+      updatedPermissions?: PermissionUpdate[] }
   | { kind: 'deny';   reason?: string;     additionalContext?: string }
   | { kind: 'ask';    reason?: string };
 

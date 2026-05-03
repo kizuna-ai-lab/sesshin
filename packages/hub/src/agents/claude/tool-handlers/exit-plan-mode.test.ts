@@ -11,9 +11,19 @@ describe('exitPlanModeHandler', () => {
     const keys = out.questions[0]!.options.map(o => o.key);
     expect(keys).toEqual(['yes-default', 'yes-accept-edits', 'no']);
   });
-  it('yes-default → allow', () => {
+  it('yes-default → allow with setMode→default updatedPermissions', () => {
     expect(exitPlanModeHandler.decide([{ questionIndex: 0, selectedKeys: ['yes-default'] }], {}, ctx))
-      .toEqual({ kind: 'allow' });
+      .toEqual({
+        kind: 'allow',
+        updatedPermissions: [{ type: 'setMode', destination: 'session', mode: 'default' }],
+      });
+  });
+  it('yes-accept-edits → allow with setMode→acceptEdits updatedPermissions', () => {
+    expect(exitPlanModeHandler.decide([{ questionIndex: 0, selectedKeys: ['yes-accept-edits'] }], {}, ctx))
+      .toEqual({
+        kind: 'allow',
+        updatedPermissions: [{ type: 'setMode', destination: 'session', mode: 'acceptEdits' }],
+      });
   });
   it('no with feedback → deny + additionalContext', () => {
     const d = exitPlanModeHandler.decide(
@@ -27,15 +37,21 @@ describe('exitPlanModeHandler — PermissionRequest decision-shape mapping invar
   // to PermissionRequest-shape JSON. Here we verify the kinds and fields
   // the handler produces are exactly what that adapter expects.
   const c = { permissionMode: 'default' as const, cwd: '/', sessionAllowList: [] };
-  it('yes-default → kind:allow (adapter → behavior:"allow")', () => {
+  it('yes-default → kind:allow + updatedPermissions setMode→default (adapter → behavior:"allow" + updatedPermissions)', () => {
     expect(exitPlanModeHandler.decide(
       [{ questionIndex: 0, selectedKeys: ['yes-default'] }], { plan: 'p' }, c,
-    )).toEqual({ kind: 'allow' });
+    )).toEqual({
+      kind: 'allow',
+      updatedPermissions: [{ type: 'setMode', destination: 'session', mode: 'default' }],
+    });
   });
-  it('yes-accept-edits → kind:allow (adapter → behavior:"allow")', () => {
+  it('yes-accept-edits → kind:allow + updatedPermissions setMode→acceptEdits (adapter → behavior:"allow" + updatedPermissions)', () => {
     expect(exitPlanModeHandler.decide(
       [{ questionIndex: 0, selectedKeys: ['yes-accept-edits'] }], { plan: 'p' }, c,
-    )).toEqual({ kind: 'allow' });
+    )).toEqual({
+      kind: 'allow',
+      updatedPermissions: [{ type: 'setMode', destination: 'session', mode: 'acceptEdits' }],
+    });
   });
   it('no with freeText → kind:deny + additionalContext (adapter → behavior:"deny" + message)', () => {
     expect(exitPlanModeHandler.decide(
