@@ -10,6 +10,7 @@ interface DiagSession {
   pendingApprovals: number;
   hasSubscribedActionsClient: boolean;
   usesPermissionRequest: boolean;
+  sessionFilePath?: string;
 }
 
 export async function runStatus(opts: { sessionId?: string; json?: boolean }): Promise<number> {
@@ -26,7 +27,8 @@ export async function runStatus(opts: { sessionId?: string; json?: boolean }): P
     process.stdout.write(
       `${s.id}  ${s.state}  mode=${s.permissionMode}  pr=${pr}  pending=${s.pendingApprovals}  clients=${s.hasSubscribedActionsClient ? 'yes' : 'no'}\n`,
     );
-    if (s.sessionAllowList.length) process.stdout.write(`  session allow:  ${s.sessionAllowList.join(', ')}\n`);
+    if (s.sessionFilePath)          process.stdout.write(`  log:            ${s.sessionFilePath}\n`);
+    if (s.sessionAllowList.length)  process.stdout.write(`  session allow:  ${s.sessionAllowList.join(', ')}\n`);
     if (s.claudeAllowRules.length)  process.stdout.write(`  claude allow:   ${s.claudeAllowRules.join(', ')}\n`);
   }
   return 0;
