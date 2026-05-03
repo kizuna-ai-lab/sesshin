@@ -9,6 +9,7 @@ interface DiagSession {
   claudeAllowRules: string[];
   pendingApprovals: number;
   hasSubscribedActionsClient: boolean;
+  usesPermissionRequest: boolean;
 }
 
 export async function runStatus(opts: { sessionId?: string; json?: boolean }): Promise<number> {
@@ -21,7 +22,10 @@ export async function runStatus(opts: { sessionId?: string; json?: boolean }): P
     return 0;
   }
   for (const s of sessions) {
-    process.stdout.write(`${s.id}  ${s.state}  mode=${s.permissionMode}  pending=${s.pendingApprovals}  clients=${s.hasSubscribedActionsClient ? 'yes' : 'no'}\n`);
+    const pr = s.usesPermissionRequest ? 'yes' : 'no';
+    process.stdout.write(
+      `${s.id}  ${s.state}  mode=${s.permissionMode}  pr=${pr}  pending=${s.pendingApprovals}  clients=${s.hasSubscribedActionsClient ? 'yes' : 'no'}\n`,
+    );
     if (s.sessionAllowList.length) process.stdout.write(`  session allow:  ${s.sessionAllowList.join(', ')}\n`);
     if (s.claudeAllowRules.length)  process.stdout.write(`  claude allow:   ${s.claudeAllowRules.join(', ')}\n`);
   }
