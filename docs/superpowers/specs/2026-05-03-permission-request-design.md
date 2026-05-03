@@ -234,9 +234,8 @@ Not wired into any agent path yet. Has its own unit tests against fixtures deriv
 interface PendingApproval {
   requestId: string;
   sessionId: string;
-  tool: string;
-  toolName: string;                    // NEW (was implicit via `tool`; rename or alias)
-  toolInput: unknown;
+  tool: string;                        // existing — kept as-is, not renamed
+  toolInput: unknown;                  // existing
   toolInputFingerprint: string;        // NEW: sha1, always present
   toolUseId?: string;                  // existing
   createdAt: number;
@@ -244,7 +243,7 @@ interface PendingApproval {
 }
 ```
 
-Note: `tool` is renamed to `toolName` for clarity; callers updated. The fingerprint is computed inside `open()` from `input.toolInput` via `fingerprintToolInput`.
+Only one new field is added: `toolInputFingerprint`. The earlier draft proposed renaming `tool` → `toolName` for clarity, but that would have churned `wire.ts`, WS broadcast types, and unrelated tests for no functional gain — kept `tool` to keep the diff focused on PermissionRequest semantics. The fingerprint is computed inside `open()` from `input.toolInput` via `fingerprintToolInput`.
 
 ### 5.2 New indexes
 
