@@ -31,5 +31,16 @@ export function generateHooksOnlySettings(o: HooksSettingsInput): string {
       }],
     }];
   }
+  // PermissionRequest is an HTTP hook — Claude POSTs the PermissionRequest
+  // payload directly to the hub. The session id is encoded in the URL path
+  // because Claude's body carries Claude's native session_id (a UUID), not
+  // the sesshin-side id the registry knows about.
+  hooks['PermissionRequest'] = [{
+    hooks: [{
+      type: 'http',
+      url: `${o.hubUrl}/permission/${o.sessionId}`,
+      timeout: 600,
+    }],
+  }];
   return JSON.stringify({ hooks }, null, 2);
 }
