@@ -131,3 +131,35 @@ describe('shouldGatePreToolUse — always policy', () => {
     expect(shouldGatePreToolUse({ permission_mode: 'bypassPermissions', tool_name: 'Bash' }, undefined, 'always')).toBe(true);
   });
 });
+
+describe('shouldGatePreToolUse — usesPermissionRequest short-circuit', () => {
+  it('returns false when usesPermissionRequest=true regardless of mode/tool/policy', () => {
+    expect(shouldGatePreToolUse(
+      { tool_name: 'Bash', tool_input: { command: 'ls' }, permission_mode: 'default' },
+      'default',
+      'always',
+      { sessionAllowList: [], claudeAllowRules: [] },
+      true,
+      true,
+    )).toBe(false);
+  });
+  it('returns false even with policy=always and gated tool', () => {
+    expect(shouldGatePreToolUse(
+      { tool_name: 'Bash', tool_input: { command: 'rm -rf /' } },
+      'default',
+      'always',
+      { sessionAllowList: [], claudeAllowRules: [] },
+      true,
+      true,
+    )).toBe(false);
+  });
+  it('default usesPermissionRequest=false preserves existing behavior', () => {
+    expect(shouldGatePreToolUse(
+      { tool_name: 'Bash', tool_input: { command: 'ls' } },
+      'default',
+      'auto',
+      { sessionAllowList: [], claudeAllowRules: [] },
+      true,
+    )).toBe(true);
+  });
+});
