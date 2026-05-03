@@ -6,6 +6,7 @@ import type { SessionRegistry } from '../registry/session-registry.js';
 import type { PtyTap } from '../observers/pty-tap.js';
 import type { ApprovalManager } from '../approval-manager.js';
 import type { ClientInfo, HistoryEntry } from './diagnostics.js';
+import { handlePermissionRoute } from './permission.js';
 
 export interface RestServerDeps {
   registry: SessionRegistry;
@@ -34,6 +35,19 @@ export interface RestServerDeps {
     decision: 'allow' | 'deny' | 'ask';
     reason?: string;
     updatedInput?: Record<string, unknown>;
+  } | null>;
+  /**
+   * Called for PermissionRequest HTTP hooks (Claude Code's real approval gate).
+   * Body shape is distinct from PreToolUse: returning a decision yields the
+   * `behavior` shape (no `ask` — PermissionRequest has no equivalent).
+   * Returning `null` means passthrough → 204 so Claude falls back to its TUI.
+   */
+  onPermissionRequestApproval?: (envelope: {
+    agent: string; sessionId: string; ts: number; event: string; raw: Record<string, unknown>;
+  }) => Promise<{
+    behavior: 'allow' | 'deny';
+    updatedInput?: Record<string, unknown>;
+    message?: string;
   } | null>;
   /** Approval manager for diagnostics endpoint (T9). When omitted, /api/diagnostics returns 503. */
   approvals?: ApprovalManager;
@@ -245,6 +259,13 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     if (!Number.isFinite(ttl) || ttl < 0) return void res.writeHead(400).end();
     const until = ttl > 0 ? Date.now() + ttl : null;
     return void res.writeHead(deps.registry.setQuietUntil(id, until) ? 204 : 404).end();
+  }
+
+  const permRoute = url.pathname.match(/^\/permission\/([^/]+)$/);
+  if (permRoute) {
+    const sid = permRoute[1]!;
+    if (method !== 'POST') return void res.writeHead(405).end();
+    return handlePermissionRoute(req, res, sid, deps);
   }
 
   res.writeHead(404).end();
