@@ -62,7 +62,15 @@ export async function runLog(opts: LogOpts): Promise<number> {
   if (opts.tail) {
     // Hand off to `tail -F` so logrotate / atomic-rename handles cleanly.
     const child = spawn('tail', ['-F', path], { stdio: 'inherit' });
-    return new Promise((res) => child.on('exit', (c) => res(c ?? 0)));
+    return new Promise((res) => {
+      // Handle ENOENT (no `tail` on PATH — minimal containers, Windows w/o
+      // GnuWin32) and other spawn errors so we don't hang awaiting exit.
+      child.on('error', (err) => {
+        process.stderr.write(`failed to spawn tail: ${err.message}\n`);
+        res(127);
+      });
+      child.on('exit', (c) => res(c ?? 0));
+    });
   }
   if (opts.filter) {
     return streamFiltered(path, opts.filter);
@@ -73,14 +81,24 @@ export async function runLog(opts: LogOpts): Promise<number> {
 }
 
 async function streamFiltered(path: string, type: string): Promise<number> {
-  const stream = createReadStream(path, { encoding: 'utf-8' });
-  const rl = createInterface({ input: stream, crlfDelay: Infinity });
-  for await (const line of rl) {
-    if (!line) continue;
-    let obj: { type?: unknown };
-    try { obj = JSON.parse(line) as { type?: unknown }; }
-    catch { continue; }
-    if (obj && obj.type === type) process.stdout.write(line + '\n');
+  // createReadStream emits 'error' asynchronously (ENOENT if the file was
+  // rotated or deleted between the diagnostics read and now, EACCES on
+  // permission failure). readline forwards stream errors as a rejection
+  // from the for-await iterator, so a single try/catch covers both the
+  // sync construction failures and async stream errors.
+  try {
+    const stream = createReadStream(path, { encoding: 'utf-8' });
+    const rl = createInterface({ input: stream, crlfDelay: Infinity });
+    for await (const line of rl) {
+      if (!line) continue;
+      let obj: { type?: unknown };
+      try { obj = JSON.parse(line) as { type?: unknown }; }
+      catch { continue; }
+      if (obj && obj.type === type) process.stdout.write(line + '\n');
+    }
+    return 0;
+  } catch (err) {
+    process.stderr.write(`error reading log file ${path}: ${(err as Error).message}\n`);
+    return 5;
   }
-  return 0;
 }
