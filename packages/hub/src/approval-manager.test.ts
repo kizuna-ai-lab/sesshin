@@ -176,6 +176,38 @@ describe('ApprovalManager — resolveSingletonForSession', () => {
   });
 });
 
+describe('ApprovalManager — same (sessionId, toolUseId) opened twice', () => {
+  it('first entry timing out does NOT poison the index for the second entry', async () => {
+    // The "same key opened twice" edge case (Claude retry, etc.). The first
+    // open()'s cleanup must NOT remove the byToolUseId index pointer that
+    // now points at the second entry — otherwise resolveByToolUseId can't
+    // find it.
+    const m = new ApprovalManager({ defaultTimeoutMs: 30 });   // short timeout to fire fast
+    const a = m.open({ sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' }, toolUseId: 'tu_1' });
+    const b = m.open({ sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' }, toolUseId: 'tu_1' });
+    // Wait for the first entry to time out.
+    await a.decision;
+    // Resolve second entry by toolUseId. With the guard in place, this finds
+    // entry B; without the guard, the index was already deleted by A's cleanup
+    // and this returns 0.
+    const resolved = m.resolveByToolUseId('s', 'tu_1', { decision: 'deny', reason: 'r' });
+    expect(resolved).toBe(1);
+    await expect(b.decision).resolves.toEqual({ decision: 'deny', reason: 'r' });
+  });
+
+  it('second entry resolving via toolUseId leaves no stale index entries', () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    m.open({ sessionId: 's', tool: 'Bash', toolInput: {}, toolUseId: 'tu_1' });
+    m.open({ sessionId: 's', tool: 'Bash', toolInput: {}, toolUseId: 'tu_1' });   // overwrites pointer
+    // resolveByToolUseId picks the second (newest pointed-at) entry. Its
+    // cleanup removes the index. The first entry, when it eventually times
+    // out, will see the index is already gone (or no longer points at it).
+    expect(m.resolveByToolUseId('s', 'tu_1', { decision: 'allow' })).toBe(1);
+    // A subsequent lookup must miss — neither entry should still be indexed.
+    expect(m.resolveByToolUseId('s', 'tu_1', { decision: 'allow' })).toBe(0);
+  });
+});
+
 describe('ApprovalManager — toolInputFingerprint', () => {
   it('open() populates toolInputFingerprint on the public PendingApproval', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });

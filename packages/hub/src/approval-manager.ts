@@ -40,7 +40,15 @@ export class ApprovalManager {
 
   private cleanupIndexes(entry: Entry): void {
     if (entry.toolUseId !== undefined) {
-      this.byToolUseId.delete(`${entry.sessionId}|${entry.toolUseId}`);
+      // Guard against the rare same-(sessionId, toolUseId) overwrite case:
+      // if a second open() with the same key replaced this entry's pointer,
+      // the index now points at the *newer* entry's requestId. Clearing it
+      // unconditionally would orphan that newer entry from resolveByToolUseId.
+      // Only delete if the index still refers to *us*.
+      const key = `${entry.sessionId}|${entry.toolUseId}`;
+      if (this.byToolUseId.get(key) === entry.requestId) {
+        this.byToolUseId.delete(key);
+      }
     }
     const fpk = this.fpKey(entry.sessionId, entry.tool, entry.toolInputFingerprint);
     const set = this.byFingerprint.get(fpk);
