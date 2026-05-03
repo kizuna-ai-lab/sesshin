@@ -434,13 +434,15 @@ describe('WS server shutdown', () => {
       ws.on('open', resolve); ws.on('error', reject);
     });
 
-    const start = Date.now();
+    // Promise.race below provides the 1s deadline; if the regression
+    // returns, the timeout side wins and the test fails via reject. (No
+    // wall-clock assertion — flake-prone on busy CI and redundant given
+    // race already enforces the bound.)
     await Promise.race([
       localSvr.close(),
       new Promise((_resolve, reject) =>
         setTimeout(() => reject(new Error('ws server close() did not resolve within 1s')), 1000)),
     ]);
-    expect(Date.now() - start).toBeLessThan(1000);
     if (ws.readyState !== WebSocket.CLOSED) ws.close();
   });
 });

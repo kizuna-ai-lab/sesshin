@@ -93,16 +93,15 @@ describe('shutdown', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     // close() must resolve within a small bounded time even though req is
-    // still streaming. 1 second is generous; if the regression returns this
-    // would hang for the full test timeout (5s default).
-    const start = Date.now();
+    // still streaming. The Promise.race below provides the deadline: if the
+    // regression returns the timeout side wins and the test fails via the
+    // rejected promise. (No wall-clock assertion — that's redundant and
+    // flake-prone on busy CI when the close resolves just before 1s.)
     await Promise.race([
       server.close(),
       new Promise((_resolve, reject) =>
         setTimeout(() => reject(new Error('server.close() did not resolve within 1s')), 1000)),
     ]);
-    const elapsed = Date.now() - start;
-    expect(elapsed).toBeLessThan(1000);
 
     req.destroy();
   });

@@ -105,9 +105,12 @@ export function createRestServer(deps: RestServerDeps): RestServer {
       // only stops accepting new connections and resolves only after every
       // in-flight request finishes — which never happens for those long-lived
       // connections, so plain close hangs forever on shutdown. Force-close
-      // the active sockets first.
-      server.closeAllConnections?.();   // node 18.2+
+      // the active sockets after stopping accept so the drain wait completes.
+      // Order is the canonical Node pattern: close() first (synchronously
+      // stops accepting + arms the callback), then closeAllConnections()
+      // destroys the remaining sockets so close()'s callback fires.
       server.close((e) => (e ? reject(e) : resolve()));
+      server.closeAllConnections?.();   // node 18.2+
     }),
     address: () => server.address() as AddressInfo,
   };
