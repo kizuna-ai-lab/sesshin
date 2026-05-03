@@ -74,3 +74,40 @@ describe('askUserQuestionHandler', () => {
     if (d.kind === 'allow') expect(d.updatedInput!['answers']).toEqual({ 'Tags?': 'a, c' });
   });
 });
+
+describe('askUserQuestionHandler — PermissionRequest shape', () => {
+  // The wire.ts onPermissionRequestApproval adapter (T15) reads
+  // pendingUpdatedInput[requestId] to populate decision.updatedInput on the
+  // wire response. Here we verify the handler always produces kind:allow
+  // and never kind:deny — its only outcome is "allow with updated input".
+  const c = { permissionMode: 'default' as const, cwd: '/', sessionAllowList: [] };
+  it('produces kind:allow with updatedInput.answers; adapter maps to behavior:allow + updatedInput', () => {
+    const input = {
+      questions: [{
+        question: 'Pick one', header: 'H', multiSelect: false,
+        options: [{ label: 'A', description: 'a' }, { label: 'B', description: 'b' }],
+      }],
+    };
+    const rendered = askUserQuestionHandler.render(input, c);
+    const optAKey = rendered.questions[0]!.options[0]!.key;
+    const decision = askUserQuestionHandler.decide(
+      [{ questionIndex: 0, selectedKeys: [optAKey] }], input, c,
+    );
+    expect(decision.kind).toBe('allow');
+    if (decision.kind === 'allow') {
+      expect(decision.updatedInput).toBeDefined();
+      expect((decision.updatedInput as { answers: Record<string, string> }).answers)
+        .toEqual({ 'Pick one': 'A' });
+    }
+  });
+  it('never produces kind:deny — its only outcome is allow with updated input', () => {
+    const input = {
+      questions: [{
+        question: 'Q', header: 'H', multiSelect: false,
+        options: [{ label: 'X', description: '' }],
+      }],
+    };
+    const decision = askUserQuestionHandler.decide([], input, c);
+    expect(decision.kind).toBe('allow');
+  });
+});
