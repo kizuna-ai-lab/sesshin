@@ -1,14 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { PermissionRequestBody } from '@sesshin/shared';
+import { PermissionRequestBody, type PermissionRequestDecision } from '@sesshin/shared';
 import type { RestServerDeps } from './server.js';
 
 const MAX_BODY_BYTES = 524_288;       // 512 KB
-
-interface PermissionDecisionOut {
-  behavior: 'allow' | 'deny';
-  updatedInput?: Record<string, unknown>;
-  message?: string;
-}
 
 /**
  * Handle Claude Code's PermissionRequest HTTP hook. The body is Claude's
@@ -74,7 +68,7 @@ export async function handlePermissionRoute(
     return;
   }
 
-  let decision: PermissionDecisionOut | null;
+  let decision: PermissionRequestDecision | null;
   try {
     decision = await deps.onPermissionRequestApproval(envelope);
   } catch {
@@ -86,8 +80,11 @@ export async function handlePermissionRoute(
   sendDecision(res, decision);
 }
 
-function sendDecision(res: ServerResponse, decision: PermissionDecisionOut): void {
-  // Per-behavior shape — keeps types honest, prevents field cross-leak.
+function sendDecision(res: ServerResponse, decision: PermissionRequestDecision): void {
+  // Discriminated-union narrowing: each branch can only access fields valid
+  // for its `behavior`. The shared schema (PermissionRequestDecision)
+  // forbids `message` on allow and `updatedInput` on deny at the type level,
+  // so accidental cross-shape leakage is a compile error.
   const body = decision.behavior === 'allow'
     ? {
         hookSpecificOutput: {

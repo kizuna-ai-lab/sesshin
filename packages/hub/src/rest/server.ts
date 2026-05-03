@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { z } from 'zod';
-import { PermissionModeEnum, fingerprintToolInput } from '@sesshin/shared';
+import { PermissionModeEnum, fingerprintToolInput, type PermissionRequestDecision } from '@sesshin/shared';
 import type { SessionRegistry } from '../registry/session-registry.js';
 import type { PtyTap } from '../observers/pty-tap.js';
 import type { ApprovalManager } from '../approval-manager.js';
@@ -41,14 +41,14 @@ export interface RestServerDeps {
    * Body shape is distinct from PreToolUse: returning a decision yields the
    * `behavior` shape (no `ask` — PermissionRequest has no equivalent).
    * Returning `null` means passthrough → 204 so Claude falls back to its TUI.
+   *
+   * Decision uses the shared discriminated union: `allow` may carry
+   * `updatedInput`, `deny` may carry `message`, and the type system rejects
+   * the cross-product (no `message` on allow, no `updatedInput` on deny).
    */
   onPermissionRequestApproval?: (envelope: {
     agent: string; sessionId: string; ts: number; event: string; raw: Record<string, unknown>;
-  }) => Promise<{
-    behavior: 'allow' | 'deny';
-    updatedInput?: Record<string, unknown>;
-    message?: string;
-  } | null>;
+  }) => Promise<PermissionRequestDecision | null>;
   /** Approval manager for diagnostics endpoint (T9). When omitted, /api/diagnostics returns 503. */
   approvals?: ApprovalManager;
   /** True iff there's a connected actions-capable client subscribed to this session. */
