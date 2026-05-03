@@ -209,12 +209,19 @@ export class SessionRegistry extends EventEmitter {
 
   private publicView(s: SessionRecord): SessionInfo {
     const {
-      sessionFilePath: _f, fileTailCursor: _c, lastHeartbeat: _h,
+      // Stripped fields (private to the hub):
+      fileTailCursor: _c, lastHeartbeat: _h,
       claudeAllowRules: _a, sessionAllowList: _l,
       sessionGateOverride: _g, pin: _p, quietUntil: _q,
+      usesPermissionRequest: _u,
+      // Surfaced fields stay in `pub`:
+      sessionFilePath,
       ...pub
     } = s;
-    return pub;
+    // sessionFilePath is meaningful only when set (CLI register passes a
+    // placeholder before SessionStart fixes it up). Surface only when
+    // non-empty so client UIs don't show "/x" placeholders.
+    return sessionFilePath ? { ...pub, sessionFilePath } : pub;
   }
 
   override emit<K extends keyof RegistryEvents>(event: K, ...args: Parameters<RegistryEvents[K]>): boolean {

@@ -35,14 +35,21 @@ export type Substate = z.infer<typeof SubstateSchema>;
 export const AgentEnum = z.enum(['claude-code', 'codex', 'gemini', 'other']);
 
 export const SessionInfoSchema = z.object({
-  id:             z.string(),
-  name:           z.string(),
-  agent:          AgentEnum,
-  cwd:            z.string(),
-  pid:            z.number().int(),
-  startedAt:      z.number().int(),
-  state:          SessionStateEnum,
-  substate:       SubstateSchema,
-  lastSummaryId:  z.string().nullable(),
+  id:              z.string(),
+  name:            z.string(),
+  agent:           AgentEnum,
+  cwd:             z.string(),
+  pid:             z.number().int(),
+  startedAt:       z.number().int(),
+  state:           SessionStateEnum,
+  substate:        SubstateSchema,
+  lastSummaryId:   z.string().nullable(),
+  /**
+   * Absolute path to the Claude Code JSONL transcript for this session, when
+   * known. Optional because (a) older registered sessions might not have it
+   * set yet, (b) non-Claude agents don't have an equivalent. Surfaced so
+   * UIs can offer "open log" / "copy log path" affordances.
+   */
+  sessionFilePath: z.string().optional(),
 });
 export type SessionInfo = z.infer<typeof SessionInfoSchema>;
