@@ -30,6 +30,7 @@ export interface ApprovalManagerOpts {
 
 export class ApprovalManager {
   private pending = new Map<string, Entry>();
+  private byToolUseId = new Map<string, string>();   // `${sessionId}|${toolUseId}` → requestId
   constructor(private opts: ApprovalManagerOpts) {}
 
   /**
@@ -66,11 +67,17 @@ export class ApprovalManager {
       const timer = setTimeout(() => {
         const existed = this.pending.delete(requestId);
         if (!existed) return;
+        if (request.toolUseId !== undefined) {
+          this.byToolUseId.delete(`${request.sessionId}|${request.toolUseId}`);
+        }
         try { onExpire(request); } catch { /* notification best-effort */ }
         resolve(fallback);
       }, timeoutMs);
       const entry: Entry = { ...request, resolve, timer, onExpire };
       this.pending.set(requestId, entry);
+      if (input.toolUseId !== undefined) {
+        this.byToolUseId.set(`${input.sessionId}|${input.toolUseId}`, requestId);
+      }
     });
     return { request, decision };
   }
@@ -81,8 +88,25 @@ export class ApprovalManager {
     if (!entry) return false;
     clearTimeout(entry.timer);
     this.pending.delete(requestId);
+    if (entry.toolUseId !== undefined) {
+      this.byToolUseId.delete(`${entry.sessionId}|${entry.toolUseId}`);
+    }
     entry.resolve(outcome);
     return true;
+  }
+
+  /**
+   * Resolve a pending approval matched by exact `(sessionId, toolUseId)`.
+   * Returns 1 iff a pending request was found and resolved, else 0.
+   *
+   * Used by the stale-cleanup path: when PostToolUse / Stop arrives for a
+   * tool whose approval is still pending, we don't want to leave the hook's
+   * HTTP connection waiting on a decision that will no longer affect runtime.
+   */
+  resolveByToolUseId(sessionId: string, toolUseId: string, outcome: ApprovalOutcome): 0 | 1 {
+    const requestId = this.byToolUseId.get(`${sessionId}|${toolUseId}`);
+    if (!requestId) return 0;
+    return this.decide(requestId, outcome) ? 1 : 0;
   }
 
   /**
@@ -99,6 +123,9 @@ export class ApprovalManager {
       if (e.sessionId !== sessionId) continue;
       clearTimeout(e.timer);
       this.pending.delete(rid);
+      if (e.toolUseId !== undefined) {
+        this.byToolUseId.delete(`${e.sessionId}|${e.toolUseId}`);
+      }
       e.resolve({ decision: 'ask', reason });
       cancelled += 1;
     }

@@ -78,6 +78,40 @@ describe('ApprovalManager', () => {
   });
 });
 
+describe('ApprovalManager — resolveByToolUseId', () => {
+  it('resolves matching entry, returns 1, fulfills decision Promise with the outcome', async () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    const { request, decision } = m.open({
+      sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' }, toolUseId: 'tu_1',
+    });
+    expect(request.toolUseId).toBe('tu_1');
+    const n = m.resolveByToolUseId('s', 'tu_1', { decision: 'deny', reason: 'r' });
+    expect(n).toBe(1);
+    await expect(decision).resolves.toEqual({ decision: 'deny', reason: 'r' });
+  });
+  it('returns 0 when no entry matches', () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    expect(m.resolveByToolUseId('s', 'tu_missing', { decision: 'ask' })).toBe(0);
+  });
+  it('returns 0 when toolUseId differs from the open() entry', () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    m.open({ sessionId: 's', tool: 'Bash', toolInput: {}, toolUseId: 'tu_1' });
+    expect(m.resolveByToolUseId('s', 'tu_2', { decision: 'ask' })).toBe(0);
+  });
+  it('returns 0 when sessionId differs', () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    m.open({ sessionId: 's1', tool: 'Bash', toolInput: {}, toolUseId: 'tu_1' });
+    expect(m.resolveByToolUseId('s2', 'tu_1', { decision: 'ask' })).toBe(0);
+  });
+  it('after resolveByToolUseId, the entry is gone from pendingForSession', () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    m.open({ sessionId: 's', tool: 'Bash', toolInput: {}, toolUseId: 'tu_1' });
+    expect(m.pendingForSession('s')).toHaveLength(1);
+    m.resolveByToolUseId('s', 'tu_1', { decision: 'allow' });
+    expect(m.pendingForSession('s')).toHaveLength(0);
+  });
+});
+
 describe('ApprovalManager — toolInputFingerprint', () => {
   it('open() populates toolInputFingerprint on the public PendingApproval', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
