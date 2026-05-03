@@ -118,3 +118,92 @@ describe('POST /permission/:sessionId — happy paths', () => {
     expect(registry.get('s1')!.usesPermissionRequest).toBe(true);
   });
 });
+
+describe('POST /permission/:sessionId — failure modes', () => {
+  it('body > 512 KB → 200 + deny "too large"', async () => {
+    svr = createRestServer({
+      registry, approvals,
+      onPermissionRequestApproval: async () => ({ behavior: 'allow' }),
+    });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const huge = { ...(PERM_BODY() as object), tool_input: { command: 'x'.repeat(600_000) } };
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(huge),
+    });
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.hookSpecificOutput.decision).toEqual({
+      behavior: 'deny', message: 'Permission request too large',
+    });
+  });
+  it('unregistered :sessionId → 200 + deny "session not registered"', async () => {
+    svr = createRestServer({
+      registry, approvals,
+      onPermissionRequestApproval: async () => ({ behavior: 'allow' }),
+    });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission/missing`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(PERM_BODY()),
+    });
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.hookSpecificOutput.decision).toEqual({
+      behavior: 'deny', message: 'sesshin: session not registered',
+    });
+  });
+  it('malformed JSON → 400', async () => {
+    svr = createRestServer({ registry, approvals });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: '{ this is not json',
+    });
+    expect(r.status).toBe(400);
+  });
+  it('Zod fail (missing tool_name) → 400', async () => {
+    svr = createRestServer({ registry, approvals });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const bad = { session_id: 'x', hook_event_name: 'PermissionRequest', tool_input: {} };
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(bad),
+    });
+    expect(r.status).toBe(400);
+  });
+  it('callback throws → 204 passthrough (state event still emitted)', async () => {
+    const onHookEvent = vi.fn();
+    svr = createRestServer({
+      registry, approvals,
+      onHookEvent,
+      onPermissionRequestApproval: async () => { throw new Error('boom'); },
+    });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(PERM_BODY()),
+    });
+    expect(r.status).toBe(204);
+    expect(onHookEvent).toHaveBeenCalledTimes(1);
+  });
+  it('GET /permission/:sessionId → 405', async () => {
+    svr = createRestServer({ registry, approvals });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`);
+    expect(r.status).toBe(405);
+  });
+  it('POST /permission (no segment) → 404', async () => {
+    svr = createRestServer({ registry, approvals });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission`, { method: 'POST' });
+    expect(r.status).toBe(404);
+  });
+});
