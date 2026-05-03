@@ -104,3 +104,27 @@ describe('SessionRegistry', () => {
     expect(r.setQuietUntil('missing', 1)).toBe(false);
   });
 });
+
+describe('SessionRegistry — usesPermissionRequest', () => {
+  it('newly-registered session has usesPermissionRequest=false', () => {
+    const r = makeReg();
+    r.register({ id: 's', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    expect(r.get('s')!.usesPermissionRequest).toBe(false);
+  });
+  it('markUsesPermissionRequest sets the flag and returns true on first call', () => {
+    const r = makeReg();
+    r.register({ id: 's', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    expect(r.markUsesPermissionRequest('s')).toBe(true);
+    expect(r.get('s')!.usesPermissionRequest).toBe(true);
+  });
+  it('markUsesPermissionRequest returns false when already set (idempotent)', () => {
+    const r = makeReg();
+    r.register({ id: 's', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    r.markUsesPermissionRequest('s');
+    expect(r.markUsesPermissionRequest('s')).toBe(false);
+  });
+  it('markUsesPermissionRequest returns false when session not registered', () => {
+    const r = makeReg();
+    expect(r.markUsesPermissionRequest('missing')).toBe(false);
+  });
+});

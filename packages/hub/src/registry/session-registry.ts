@@ -35,6 +35,12 @@ export interface SessionRecord extends SessionInfo {
   sessionGateOverride: 'disabled' | 'auto' | 'always' | null;
   pin: string | null;
   quietUntil: number | null;
+  /**
+   * True once a PermissionRequest HTTP hook has been observed for this session.
+   * Sticky for the lifetime of the session — once the real approval gate is
+   * known to be wired, sesshin's PreToolUse adapter passes through.
+   */
+  usesPermissionRequest: boolean;
 }
 
 export class SessionRegistry extends EventEmitter {
@@ -59,6 +65,7 @@ export class SessionRegistry extends EventEmitter {
       sessionGateOverride: null,
       pin: null,
       quietUntil: null,
+      usesPermissionRequest: false,
     };
     this.sessions.set(rec.id, rec);
     this.emit('session-added', this.publicView(rec));
@@ -185,6 +192,19 @@ export class SessionRegistry extends EventEmitter {
 
   getQuietUntil(id: string): number | null {
     return this.sessions.get(id)?.quietUntil ?? null;
+  }
+
+  /**
+   * Mark a session as using the PermissionRequest HTTP hook as its real
+   * approval gate. Once set the flag is sticky for the session lifetime.
+   * Returns true iff this call changed the flag from false→true.
+   */
+  markUsesPermissionRequest(id: string): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    if (s.usesPermissionRequest) return false;
+    s.usesPermissionRequest = true;
+    return true;
   }
 
   private publicView(s: SessionRecord): SessionInfo {
