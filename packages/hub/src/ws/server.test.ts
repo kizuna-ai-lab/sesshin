@@ -414,3 +414,33 @@ describe('input.action stop bypasses canAcceptInput running-state gate', () => {
     }
   });
 });
+
+describe('WS server shutdown', () => {
+  it('close() resolves promptly even with an active WS client connected', async () => {
+    // Regression: previously close() did wss.close → http.close, but
+    // http.close waits for every in-flight HTTP-upgraded socket to drain.
+    // Long-lived WS clients never drain on their own, so the listen socket
+    // closed but the event loop kept the process alive forever — hub stuck
+    // half-dead (port not listening, but not exited either).
+    const localSvr = createWsServer({
+      registry: new SessionRegistry(), bus: new EventBus(),
+      tap: new PtyTap({ ringBytes: 1024 }), staticDir: null,
+    });
+    await localSvr.listen(0, '127.0.0.1');
+    const localPort = localSvr.address().port;
+
+    const ws = new WebSocket(`ws://127.0.0.1:${localPort}/v1/ws`);
+    await new Promise<void>((resolve, reject) => {
+      ws.on('open', resolve); ws.on('error', reject);
+    });
+
+    const start = Date.now();
+    await Promise.race([
+      localSvr.close(),
+      new Promise((_resolve, reject) =>
+        setTimeout(() => reject(new Error('ws server close() did not resolve within 1s')), 1000)),
+    ]);
+    expect(Date.now() - start).toBeLessThan(1000);
+    if (ws.readyState !== WebSocket.CLOSED) ws.close();
+  });
+});

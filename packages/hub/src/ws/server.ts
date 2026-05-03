@@ -107,7 +107,17 @@ export function createWsServer(deps: WsServerDeps): WsServerInstance {
     }),
     close: () => new Promise((resolve) => {
       for (const ws of sockets) ws.terminate();
-      wss.close(() => http.close(() => resolve()));
+      wss.close(() => {
+        // http.close() only stops accepting new connections; it waits for
+        // every in-flight request to finish before resolving. Sesshin holds
+        // open long-lived requests (sink-stream, raw byte stream, heartbeat)
+        // for the lifetime of the wrapped CLI, so http.close alone hangs
+        // forever on shutdown — listen socket gone, but event loop alive
+        // because of the established connections. Force-close them so
+        // shutdown actually terminates.
+        http.closeAllConnections?.();   // node 18.2+
+        http.close(() => resolve());
+      });
     }),
     address: () => http.address() as AddressInfo,
     broadcast: (msg) => {

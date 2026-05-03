@@ -62,3 +62,48 @@ describe('/api/sessions/:id/raw — streaming', () => {
     }
   });
 });
+
+describe('shutdown', () => {
+  it('close() resolves promptly even with active long-poll connections', async () => {
+    // Regression: graceful shutdown previously hung forever when long-lived
+    // chunked POSTs (e.g. raw byte ingest, sink-stream) were active —
+    // server.close() waits for every in-flight request to finish, but those
+    // never end on their own. Listen socket would close immediately, but
+    // the process kept event-looping on the active connections, leaving the
+    // hub half-dead (port not listening, but not exited either). Fix:
+    // server.closeAllConnections() force-terminates them so close resolves.
+    const registry = new SessionRegistry();
+    const tap = new PtyTap({ ringBytes: 4096 });
+    const server = createRestServer({ registry, tap });
+    await server.listen(0, '127.0.0.1');
+    const localPort = server.address().port;
+
+    const sid = 'longpoll-shutdown-test';
+    registry.register({ id: sid, name: 'n', agent: 'claude-code', cwd: '/tmp', pid: 1, sessionFilePath: '/tmp/x.jsonl' });
+
+    // Open a long-lived chunked POST (the canonical hang-causing pattern).
+    const req = httpRequest({
+      method: 'POST', host: '127.0.0.1', port: localPort,
+      path: `/api/sessions/${sid}/raw`,
+      headers: { 'content-type': 'application/octet-stream', 'transfer-encoding': 'chunked' },
+    });
+    req.on('error', () => {});
+    req.write('keepalive');
+    // Wait for the chunk to actually reach the server before testing close().
+    await new Promise((r) => setTimeout(r, 50));
+
+    // close() must resolve within a small bounded time even though req is
+    // still streaming. 1 second is generous; if the regression returns this
+    // would hang for the full test timeout (5s default).
+    const start = Date.now();
+    await Promise.race([
+      server.close(),
+      new Promise((_resolve, reject) =>
+        setTimeout(() => reject(new Error('server.close() did not resolve within 1s')), 1000)),
+    ]);
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeLessThan(1000);
+
+    req.destroy();
+  });
+});

@@ -99,7 +99,16 @@ export function createRestServer(deps: RestServerDeps): RestServer {
       server.once('error', reject);
       server.listen(port, host, () => { server.off('error', reject); resolve(); });
     }),
-    close: () => new Promise((resolve, reject) => server.close((e) => (e ? reject(e) : resolve()))),
+    close: () => new Promise((resolve, reject) => {
+      // Sesshin's REST server holds open long-poll connections (the CLI
+      // raw-byte ingest, sink-stream, and approval HTTP holds). server.close
+      // only stops accepting new connections and resolves only after every
+      // in-flight request finishes — which never happens for those long-lived
+      // connections, so plain close hangs forever on shutdown. Force-close
+      // the active sockets first.
+      server.closeAllConnections?.();   // node 18.2+
+      server.close((e) => (e ? reject(e) : resolve()));
+    }),
     address: () => server.address() as AddressInfo,
   };
 }

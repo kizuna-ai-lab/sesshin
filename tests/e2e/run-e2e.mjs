@@ -2,7 +2,7 @@
 import { spawn, execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import WS from 'ws';
 
@@ -13,14 +13,29 @@ const HUB_BIN  = join(ROOT, 'packages/hub/bin/sesshin-hub');
 const CLI_BIN  = join(ROOT, 'packages/cli/bin/sesshin');
 const HOOK_BIN = join(ROOT, 'packages/hook-handler/bin/sesshin-hook-handler');
 
+// Only kill hubs that were spawned BY e2e runs (current or previous). Earlier
+// versions killed any process whose cmdline contained "sesshin-hub" — that
+// over-killed users' real running hubs in the same shell, taking down their
+// REST/WS listen sockets. e2e hubs always have HOME=/tmp/sesshin-e2e-* in
+// their environ (we set HOME below to isolate ~/.cache); real user hubs have
+// HOME under the user's home directory. Scope the kill via /proc/<pid>/environ.
 function killLeftoverHubs() {
   try {
     const out = execSync('ps -eo pid,args').toString();
     for (const line of out.split('\n')) {
-      if (line.includes('sesshin-hub') && !line.includes('grep')) {
-        const m = line.trim().match(/^(\d+)/);
-        if (m) { try { process.kill(Number(m[1])); } catch {} }
-      }
+      if (!line.includes('sesshin-hub') || line.includes('grep')) continue;
+      const m = line.trim().match(/^(\d+)/);
+      if (!m) continue;
+      const pid = Number(m[1]);
+      // Read environ to confirm this hub belongs to a (previous) e2e run.
+      // /proc/<pid>/environ may be unreadable (perms, race) — in that case
+      // skip rather than risk a misfire.
+      let environ = '';
+      try { environ = readFileSync(`/proc/${pid}/environ`, 'utf-8'); } catch { continue; }
+      const home = environ.split('\0').find((kv) => kv.startsWith('HOME='));
+      if (!home) continue;
+      if (!home.startsWith('HOME=/tmp/sesshin-e2e-')) continue;
+      try { process.kill(pid); } catch {}
     }
   } catch {}
 }
