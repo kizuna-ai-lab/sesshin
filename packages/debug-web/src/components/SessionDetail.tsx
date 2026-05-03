@@ -6,6 +6,7 @@ import { EventTimeline } from './EventTimeline.js';
 import { ActionButtons } from './ActionButtons.js';
 import { TextInput } from './TextInput.js';
 import { InteractionPanel } from './InteractionPanel.js';
+import { CopyBtn } from './CopyBtn.js';
 import type { WsClient } from '../ws-client.js';
 
 function stripAnsi(s: string): string {
@@ -20,11 +21,25 @@ export function SessionDetail({ ws }: { ws: WsClient }) {
   const raw = rawBySession.value[s.id] ?? '';
   return (
     <div style={{ padding: 16, color: '#eee' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
         <h2 style={{ margin: 0 }}>{s.name}</h2>
         <StateBadge state={s.state} />
         <ModeBadge mode={s.substate.permissionMode} />
       </div>
+      <div data-testid="session-id-row"
+           style={{ display: 'flex', alignItems: 'center', marginBottom: 4, fontSize: 12, opacity: 0.75 }}>
+        <span style={{ opacity: 0.55, marginRight: 6 }}>id:</span>
+        <code style={{ fontFamily: 'monospace' }}>{s.id}</code>
+        <CopyBtn text={s.id} label="copy" />
+      </div>
+      {s.sessionFilePath && (
+        <div data-testid="session-log-row"
+             style={{ display: 'flex', alignItems: 'center', marginBottom: 12, fontSize: 12, opacity: 0.75 }}>
+          <span style={{ opacity: 0.55, marginRight: 6 }}>log:</span>
+          <code style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{s.sessionFilePath}</code>
+          <CopyBtn text={s.sessionFilePath} label="copy path" />
+        </div>
+      )}
       <SummaryCard summary={summaries[0] ?? null} />
       <InteractionPanel ws={ws} sessionId={s.id} />
       <ActionButtons ws={ws} sessionId={s.id} />
