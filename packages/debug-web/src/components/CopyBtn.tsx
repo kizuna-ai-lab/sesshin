@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { useState, useRef, useEffect } from 'preact/hooks';
 
 interface Props {
   /** The text that will be written to the clipboard. */
@@ -16,6 +16,16 @@ interface Props {
  */
 export function CopyBtn({ text, label, feedbackMs = 1200 }: Props) {
   const [state, setState] = useState<'idle' | 'ok' | 'err'>('idle');
+  // useRef + manual reset gives us two properties useEffect-on-state can't:
+  // (1) rapid-click resets the timer so feedbackMs is honored after the LAST
+  //     click — useEffect bails out when setState('ok') matches current state
+  //     so the original timer would still expire mid-feedback.
+  // (2) unmount cleanup avoids the "setState on unmounted component" warning.
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (timerRef.current !== null) clearTimeout(timerRef.current);
+  }, []);
 
   async function copy(): Promise<void> {
     try {
@@ -24,7 +34,11 @@ export function CopyBtn({ text, label, feedbackMs = 1200 }: Props) {
     } catch {
       setState('err');
     }
-    setTimeout(() => setState('idle'), feedbackMs);
+    if (timerRef.current !== null) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      setState('idle');
+    }, feedbackMs);
   }
 
   const display = state === 'ok' ? '✓ copied'

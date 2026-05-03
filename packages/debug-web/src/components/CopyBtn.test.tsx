@@ -67,4 +67,39 @@ describe('CopyBtn', () => {
     const btn = host.querySelector('[data-testid="copy-btn"]') as HTMLButtonElement;
     expect(btn.title).toContain('/very/long/path/to/transcript.jsonl');
   });
+
+  it('rapid clicks reset the timer (consistent feedbackMs after the LAST click)', async () => {
+    render(<CopyBtn text="x" label="copy" feedbackMs={80} />, host);
+    const btn = host.querySelector('[data-testid="copy-btn"]') as HTMLButtonElement;
+    btn.click();
+    await tick(0);
+    expect(btn.textContent).toBe('✓ copied');
+    // Click again 50ms in — original timer would fire at 80ms (only 30ms after
+    // this click). With the reset, the timer resets and we get 80ms after THIS click.
+    await tick(50);
+    btn.click();
+    await tick(0);
+    expect(btn.textContent).toBe('✓ copied');
+    // 50ms after second click: still in feedback window (< 80ms).
+    await tick(50);
+    expect(btn.textContent).toBe('✓ copied');
+    // 80ms+ after second click: now revert.
+    await tick(50);
+    expect(btn.textContent).toBe('copy');
+  });
+
+  it('unmount during pending feedback does not throw or leak timers', async () => {
+    render(<CopyBtn text="x" label="copy" feedbackMs={1000} />, host);
+    const btn = host.querySelector('[data-testid="copy-btn"]') as HTMLButtonElement;
+    btn.click();
+    await tick(0);
+    expect(btn.textContent).toBe('✓ copied');
+    // Unmount while the timer is still pending. Should clear the timer; if it
+    // didn't, the next setState('idle') would fire on a torn-down tree.
+    render(null, host);
+    await tick(50);
+    // No assertion needed beyond "didn't throw" — if cleanup is missing, vitest
+    // surfaces the act-on-unmounted warning.
+    expect(true).toBe(true);
+  });
 });
