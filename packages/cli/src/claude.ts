@@ -100,15 +100,26 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
     onInput: (data, _src) => wrap.write(data),
   });
 
-  installCleanup({
-    tempSettingsPath,
-    onShutdown: async () => {
-      stopHeartbeat();
-      tap.close();
-      inject.close();
-      try { await fetch(`${HUB_URL}/api/sessions/${sessionId}`, { method: 'DELETE' }); } catch {}
-    },
-  });
+  // Shutdown is triggered by:
+  //   (a) signal (SIGINT/SIGTERM) — via installCleanup's signal handlers
+  //   (b) claude exiting naturally (`exit` / Ctrl+D) — via wrap.onExit
+  // Both paths must hit DELETE /api/sessions/:id, otherwise the hub
+  // accumulates stale "done"-state sessions in its registry. Share one
+  // idempotent function across both paths.
+  let didShutdown = false;
+  const shutdown = async (): Promise<void> => {
+    if (didShutdown) return;
+    didShutdown = true;
+    stopHeartbeat();
+    tap.close();
+    inject.close();
+    try { await fetch(`${HUB_URL}/api/sessions/${sessionId}`, { method: 'DELETE' }); } catch {}
+  };
 
-  wrap.onExit((code) => process.exit(code));
+  installCleanup({ tempSettingsPath, onShutdown: shutdown });
+
+  wrap.onExit(async (code) => {
+    await shutdown();
+    process.exit(code);
+  });
 }

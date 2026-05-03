@@ -28,19 +28,24 @@ export function wireSummarizerTrigger(deps: TriggerDeps): void {
     timers.delete(sessionId);
     const arr = buffers.get(sessionId);
     if (!arr || arr.length === 0) return;
+    // Session may have been unregistered between the debounce timer being
+    // set and this fire() running (e.g., the CLI exited and DELETE'd while
+    // the timer was still pending). In that case we still want to flush
+    // the buffered summary to clients, but skip the registry write-backs.
     const session = deps.registry.get(sessionId);
-    if (!session) { arr.length = 0; return; }
     const events = arr.splice(0).map(toSummaryEvent).filter((x): x is SummaryEvent => !!x);
     // If the only thing in the window was an empty Stop-hook agent-output
     // (no content from JSONL yet), there's nothing useful to summarise.
     if (events.length === 0) return;
     const summary = await deps.summarizer.summarize({
       sessionId,
-      previousSummary: session.lastSummaryId ? { oneLine: '(prev)', bullets: [] } : null,
+      previousSummary: session?.lastSummaryId ? { oneLine: '(prev)', bullets: [] } : null,
       events,
     });
-    deps.registry.setLastSummary(sessionId, summary.summaryId);
-    if (summary.needsDecision) deps.registry.updateState(sessionId, 'awaiting-input');
+    if (session) {
+      deps.registry.setLastSummary(sessionId, summary.summaryId);
+      if (summary.needsDecision) deps.registry.updateState(sessionId, 'awaiting-input');
+    }
     deps.broadcast({ type: 'session.summary', sessionId, ...summary });
   };
 
