@@ -45,6 +45,17 @@ function mapEvent(event: string, raw: Record<string, unknown>): { kind: EventKin
       return { kind: 'error', payload: { error: pick(raw, 'error') ?? 'unknown' } };
     case 'SessionEnd':
       return { kind: 'agent-internal', payload: { phase: 'session-end' } };
+    case 'CwdChanged':
+      return { kind: 'agent-internal', payload: { cwd: pick(raw, 'cwd') } };
+    case 'Notification':
+    case 'PermissionDenied':
+    case 'SubagentStart':
+    case 'SubagentStop':
+    case 'PreCompact':
+    case 'PostCompact':
+      // Pass through as agent-internal; applier dispatches on `nativeEvent`
+      // (auto-filled from env.event) for substate updates.
+      return { kind: 'agent-internal', payload: { ...raw } };
     default:
       return { kind: 'agent-internal', payload: { ...raw } };
   }

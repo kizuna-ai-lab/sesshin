@@ -16,6 +16,8 @@ function defaultSubstate(): Substate {
     elapsedSinceProgressMs: 0, tokensUsedTurn: null,
     connectivity: 'ok', stalled: false,
     permissionMode: 'default',
+    compacting: false,
+    cwd: null,
   };
 }
 

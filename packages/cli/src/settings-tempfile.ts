@@ -5,7 +5,19 @@ export interface HooksSettingsInput {
   agent: 'claude-code';
 }
 
-const EVENTS = ['SessionStart','UserPromptSubmit','PreToolUse','PostToolUse','Stop','StopFailure','SessionEnd'] as const;
+const EVENTS = [
+  // original 7
+  'SessionStart','UserPromptSubmit','PreToolUse','PostToolUse',
+  'Stop','StopFailure','SessionEnd',
+  // claude >= 2.1: missing-but-useful command hooks. PermissionRequest is
+  // an HTTP hook (separate path), not registered here.
+  'Notification',
+  'PostToolUseFailure',
+  'PermissionDenied',
+  'SubagentStart','SubagentStop',
+  'PreCompact','PostCompact',
+  'CwdChanged',
+] as const;
 
 // claude (>= 2.x) does not honor a per-hook `env` field. Bake the env vars
 // into the command string via `/usr/bin/env VAR=value … cmd args` so the

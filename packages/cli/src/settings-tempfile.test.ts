@@ -6,10 +6,25 @@ describe('generateHooksOnlySettings', () => {
     const j = JSON.parse(generateHooksOnlySettings({ hookHandlerPath: '/p/handler', sessionId: 's1', hubUrl: 'http://h:1', agent: 'claude-code' }));
     expect(Object.keys(j)).toEqual(['hooks']);
   });
-  it('covers the seven command-hook Claude events plus PermissionRequest HTTP', () => {
+  it('covers the original seven command-hooks plus claude >= 2.1 additions plus PermissionRequest HTTP', () => {
     const j = JSON.parse(generateHooksOnlySettings({ hookHandlerPath: '/p', sessionId: 's', hubUrl: 'h', agent: 'claude-code' }));
     expect(Object.keys(j.hooks).sort()).toEqual([
-      'PermissionRequest','PostToolUse','PreToolUse','SessionEnd','SessionStart','Stop','StopFailure','UserPromptSubmit',
+      'CwdChanged',
+      'Notification',
+      'PermissionDenied',
+      'PermissionRequest',
+      'PostCompact',
+      'PostToolUse',
+      'PostToolUseFailure',
+      'PreCompact',
+      'PreToolUse',
+      'SessionEnd',
+      'SessionStart',
+      'Stop',
+      'StopFailure',
+      'SubagentStart',
+      'SubagentStop',
+      'UserPromptSubmit',
     ]);
   });
   it('bakes session env into the command string via /usr/bin/env (claude ignores the per-hook env field)', () => {

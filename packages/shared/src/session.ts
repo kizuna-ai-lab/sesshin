@@ -29,6 +29,11 @@ export const SubstateSchema = z.object({
   connectivity:          ConnectivityEnum,
   stalled:               z.boolean(),
   permissionMode:        PermissionModeEnum.default('default'),
+  // True between PreCompact and PostCompact hooks (claude is rewriting history).
+  compacting:            z.boolean().default(false),
+  // Updated when claude fires CwdChanged. Distinct from SessionInfo.cwd which
+  // captures the cwd at register time and never changes after.
+  cwd:                   z.string().nullable().default(null),
 });
 export type Substate = z.infer<typeof SubstateSchema>;
 
