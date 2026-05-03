@@ -154,6 +154,17 @@ describe('runLog --filter', () => {
   });
 });
 
+describe('runLog --filter — error paths', () => {
+  it('exit 5 + stderr message when transcript file is missing', async () => {
+    const path = join(tmp, 'definitely-missing.jsonl');   // never written
+    await stubDiagnostics([{ id: 'abc', sessionFilePath: path }]);
+    const code = await runLog({ filter: 'permission-mode' });
+    expect(code).toBe(5);
+    expect(errs.join('')).toContain('error reading log file');
+    expect(errs.join('')).toContain(path);
+  });
+});
+
 describe('runLog — hub error', () => {
   it('exit 1 when hub returns non-200', async () => {
     stub = createServer((_req, res) => { res.writeHead(503).end(); });
