@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createRestServer, type RestServer } from './server.js';
 import { SessionRegistry } from '../registry/session-registry.js';
+import { ApprovalManager } from '../approval-manager.js';
 
 let svr: RestServer; let port: number; let registry: SessionRegistry;
 beforeEach(async () => {
@@ -43,5 +44,85 @@ describe('/hooks', () => {
       body: JSON.stringify(body),
     });
     expect(r.status).toBe(400);
+  });
+});
+
+describe('/hooks — stale cleanup', () => {
+  let approvals: ApprovalManager;
+  beforeEach(async () => {
+    await svr.close();
+    approvals = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    svr = createRestServer({ registry, approvals });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+  });
+
+  const post = (event: string, raw: Record<string, unknown>): Promise<Response> =>
+    fetch(`http://127.0.0.1:${port}/hooks`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        agent: 'claude-code', sessionId: 's1', ts: Date.now(), event, raw,
+      }),
+    });
+
+  it('PostToolUse with matching tool_use_id resolves pending approval', async () => {
+    const { decision } = approvals.open({
+      sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' }, toolUseId: 'tu_1',
+    });
+    const r = await post('PostToolUse', {
+      nativeEvent: 'PostToolUse', tool_name: 'Bash',
+      tool_input: { command: 'ls' }, tool_use_id: 'tu_1',
+    });
+    expect(r.status).toBe(204);
+    await expect(decision).resolves.toMatchObject({ decision: 'deny' });
+    expect(approvals.pendingForSession('s1')).toHaveLength(0);
+  });
+  it('PostToolUse without tool_use_id but matching fingerprint resolves it', async () => {
+    const { decision } = approvals.open({
+      sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' },
+    });
+    const r = await post('PostToolUse', {
+      nativeEvent: 'PostToolUse', tool_name: 'Bash',
+      tool_input: { command: 'ls' },
+    });
+    expect(r.status).toBe(204);
+    await expect(decision).resolves.toMatchObject({ decision: 'deny' });
+  });
+  it('PostToolUseFailure cleans up the same way (uses normalized event)', async () => {
+    const { decision } = approvals.open({
+      sessionId: 's1', tool: 'Bash', toolInput: {}, toolUseId: 'tu_2',
+    });
+    await post('PostToolUseFailure', {
+      nativeEvent: 'PostToolUseFailure', tool_name: 'Bash',
+      tool_input: {}, tool_use_id: 'tu_2',
+    });
+    await expect(decision).resolves.toMatchObject({ decision: 'deny' });
+  });
+  it('Stop with no toolUseId/fingerprint match falls back to singleton', async () => {
+    const { decision } = approvals.open({
+      sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' },
+    });
+    await post('Stop', { nativeEvent: 'Stop' });
+    await expect(decision).resolves.toMatchObject({ decision: 'deny' });
+  });
+  it('Stop does NOT singleton-resolve when 2+ pending entries', async () => {
+    approvals.open({ sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' } });
+    approvals.open({ sessionId: 's1', tool: 'Edit', toolInput: { file: 'x' } });
+    await post('Stop', { nativeEvent: 'Stop' });
+    expect(approvals.pendingForSession('s1')).toHaveLength(2);
+  });
+  it('PostToolUse without tool_use_id and 2 same-fingerprint entries → no cleanup', async () => {
+    approvals.open({ sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' } });
+    approvals.open({ sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' } });
+    await post('PostToolUse', {
+      nativeEvent: 'PostToolUse', tool_name: 'Bash',
+      tool_input: { command: 'ls' },
+    });
+    expect(approvals.pendingForSession('s1')).toHaveLength(2);
+  });
+  it('UserPromptSubmit (irrelevant event) does nothing', async () => {
+    approvals.open({ sessionId: 's1', tool: 'Bash', toolInput: {}, toolUseId: 'tu_x' });
+    await post('UserPromptSubmit', { nativeEvent: 'UserPromptSubmit' });
+    expect(approvals.pendingForSession('s1')).toHaveLength(1);
   });
 });

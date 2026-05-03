@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { z } from 'zod';
-import { PermissionModeEnum } from '@sesshin/shared';
+import { PermissionModeEnum, fingerprintToolInput } from '@sesshin/shared';
 import type { SessionRegistry } from '../registry/session-registry.js';
 import type { PtyTap } from '../observers/pty-tap.js';
 import type { ApprovalManager } from '../approval-manager.js';
@@ -283,6 +283,37 @@ async function ingestHook(req: IncomingMessage, res: ServerResponse, deps: RestS
   if (!deps.registry.get(parsed.data.sessionId)) return void res.writeHead(404).end();
   // Always emit the event onto the bus (state machine, summary trigger, …).
   deps.onHookEvent?.(parsed.data);
+
+  // Stale-pending cleanup: when a tool either completes (PostToolUse /
+  // PostToolUseFailure) or the turn ends (Stop), resolve any pending
+  // approval that matches by `(sessionId, toolUseId)` exact, then by
+  // `(sessionId, toolName, fingerprint)` (only when fingerprint set has
+  // exactly one entry without toolUseId), then on Stop only by singleton.
+  if (parsed.data.event === 'PostToolUse'
+   || parsed.data.event === 'PostToolUseFailure'
+   || parsed.data.event === 'Stop') {
+    if (deps.approvals) {
+      const raw = parsed.data.raw;
+      const tuid = typeof raw['tool_use_id'] === 'string' ? raw['tool_use_id'] : null;
+      const toolName = typeof raw['tool_name'] === 'string' ? raw['tool_name'] : null;
+      const fp = (toolName && raw['tool_input'] && typeof raw['tool_input'] === 'object')
+        ? fingerprintToolInput(raw['tool_input'])
+        : null;
+      const outcome = {
+        decision: 'deny' as const,
+        reason: 'sesshin: tool already moved past pending request',
+      };
+      const sid = parsed.data.sessionId;
+
+      const resolvedExact = tuid ? deps.approvals.resolveByToolUseId(sid, tuid, outcome) : 0;
+      const resolvedFp = (resolvedExact === 0 && toolName && fp)
+        ? deps.approvals.resolveByFingerprint(sid, toolName, fp, outcome)
+        : 0;
+      if (resolvedExact === 0 && resolvedFp === 0 && parsed.data.event === 'Stop') {
+        deps.approvals.resolveSingletonForSession(sid, outcome);
+      }
+    }
+  }
   // PreToolUse can be intercepted to drive remote approval. We hold the
   // response until a client decides (or the hub's internal timeout fires
   // and falls back to "ask"). Claude is happy to wait — its default hook
