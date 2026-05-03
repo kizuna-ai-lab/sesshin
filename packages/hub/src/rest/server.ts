@@ -1,11 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { z } from 'zod';
-import { PermissionModeEnum } from '@sesshin/shared';
+import { PermissionModeEnum, fingerprintToolInput, type PermissionRequestDecision } from '@sesshin/shared';
 import type { SessionRegistry } from '../registry/session-registry.js';
 import type { PtyTap } from '../observers/pty-tap.js';
 import type { ApprovalManager } from '../approval-manager.js';
 import type { ClientInfo, HistoryEntry } from './diagnostics.js';
+import { handlePermissionRoute } from './permission.js';
 
 export interface RestServerDeps {
   registry: SessionRegistry;
@@ -35,6 +36,19 @@ export interface RestServerDeps {
     reason?: string;
     updatedInput?: Record<string, unknown>;
   } | null>;
+  /**
+   * Called for PermissionRequest HTTP hooks (Claude Code's real approval gate).
+   * Body shape is distinct from PreToolUse: returning a decision yields the
+   * `behavior` shape (no `ask` — PermissionRequest has no equivalent).
+   * Returning `null` means passthrough → 204 so Claude falls back to its TUI.
+   *
+   * Decision uses the shared discriminated union: `allow` may carry
+   * `updatedInput`, `deny` may carry `message`, and the type system rejects
+   * the cross-product (no `message` on allow, no `updatedInput` on deny).
+   */
+  onPermissionRequestApproval?: (envelope: {
+    agent: string; sessionId: string; ts: number; event: string; raw: Record<string, unknown>;
+  }) => Promise<PermissionRequestDecision | null>;
   /** Approval manager for diagnostics endpoint (T9). When omitted, /api/diagnostics returns 503. */
   approvals?: ApprovalManager;
   /** True iff there's a connected actions-capable client subscribed to this session. */
@@ -247,6 +261,13 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     return void res.writeHead(deps.registry.setQuietUntil(id, until) ? 204 : 404).end();
   }
 
+  const permRoute = url.pathname.match(/^\/permission\/([^/]+)$/);
+  if (permRoute) {
+    const sid = permRoute[1]!;
+    if (method !== 'POST') return void res.writeHead(405).end();
+    return handlePermissionRoute(req, res, sid, deps);
+  }
+
   res.writeHead(404).end();
 }
 
@@ -255,9 +276,44 @@ async function ingestHook(req: IncomingMessage, res: ServerResponse, deps: RestS
   try { body = await readJson(req); } catch { return void res.writeHead(400).end('bad json'); }
   const parsed = HookBody.safeParse(body);
   if (!parsed.success) return void res.writeHead(400).end();
+  if (parsed.data.event === 'PermissionRequest') {
+    return void res.writeHead(400, { 'content-type': 'application/json' })
+      .end(JSON.stringify({ error: 'PermissionRequest must be POSTed to /permission/:sessionId, not /hooks' }));
+  }
   if (!deps.registry.get(parsed.data.sessionId)) return void res.writeHead(404).end();
   // Always emit the event onto the bus (state machine, summary trigger, …).
   deps.onHookEvent?.(parsed.data);
+
+  // Stale-pending cleanup: when a tool either completes (PostToolUse /
+  // PostToolUseFailure) or the turn ends (Stop), resolve any pending
+  // approval that matches by `(sessionId, toolUseId)` exact, then by
+  // `(sessionId, toolName, fingerprint)` (only when fingerprint set has
+  // exactly one entry without toolUseId), then on Stop only by singleton.
+  if (parsed.data.event === 'PostToolUse'
+   || parsed.data.event === 'PostToolUseFailure'
+   || parsed.data.event === 'Stop') {
+    if (deps.approvals) {
+      const raw = parsed.data.raw;
+      const tuid = typeof raw['tool_use_id'] === 'string' ? raw['tool_use_id'] : null;
+      const toolName = typeof raw['tool_name'] === 'string' ? raw['tool_name'] : null;
+      const fp = (toolName && raw['tool_input'] && typeof raw['tool_input'] === 'object')
+        ? fingerprintToolInput(raw['tool_input'])
+        : null;
+      const outcome = {
+        decision: 'deny' as const,
+        reason: 'sesshin: tool already moved past pending request',
+      };
+      const sid = parsed.data.sessionId;
+
+      const resolvedExact = tuid ? deps.approvals.resolveByToolUseId(sid, tuid, outcome) : 0;
+      const resolvedFp = (resolvedExact === 0 && toolName && fp)
+        ? deps.approvals.resolveByFingerprint(sid, toolName, fp, outcome)
+        : 0;
+      if (resolvedExact === 0 && resolvedFp === 0 && parsed.data.event === 'Stop') {
+        deps.approvals.resolveSingletonForSession(sid, outcome);
+      }
+    }
+  }
   // PreToolUse can be intercepted to drive remote approval. We hold the
   // response until a client decides (or the hub's internal timeout fires
   // and falls back to "ask"). Claude is happy to wait — its default hook

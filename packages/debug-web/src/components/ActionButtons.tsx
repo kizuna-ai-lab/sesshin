@@ -1,15 +1,25 @@
-import type { Action } from '@sesshin/shared';
 import type { WsClient } from '../ws-client.js';
-const ACTIONS: Action[] = ['approve','reject','continue','stop','retry','fix','summarize','details','ignore','snooze'];
+
+/**
+ * Single Stop (ESC) button. The only TTY shortcut left after cleanup —
+ * everything else (y/n, Enter, structured prompt answers) is reachable
+ * via TextInput or the InteractionPanel.
+ */
 export function ActionButtons({ ws, sessionId }: { ws: WsClient; sessionId: string }) {
   return (
     <div style={{ marginBottom: 12 }} data-testid="action-buttons">
-      {ACTIONS.map((a) => (
-        <button key={a} onClick={() => ws.sendAction(sessionId, a)}
-                style={{ marginRight: 6, padding: '4px 10px', background: '#222', color: '#eee', border: '1px solid #444' }}>
-          {a}
-        </button>
-      ))}
+      <button
+        type="button"
+        onClick={() => ws.sendAction(sessionId, 'stop')}
+        title="Send ESC — interrupt running tool"
+        style={{
+          padding: '4px 12px',
+          background: '#3a1a1a', color: '#fdd', border: '1px solid #844',
+          borderRadius: 3, cursor: 'pointer',
+        }}
+      >
+        Stop (ESC)
+      </button>
     </div>
   );
 }

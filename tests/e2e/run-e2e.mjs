@@ -98,7 +98,11 @@ async function main() {
       else if (Date.now() - start > 15000) { clearInterval(t); rej(new Error(`timeout waiting for prompt+state. promptShown=${promptShown} state=${got.state} cliOut:\n${cliOut}`)); }
     }, 50);
   });
-  ws.send(JSON.stringify({ type: 'input.action', sessionId: sid, action: 'approve' }));
+  // Send a literal "y\r" via input.text — equivalent to the old action:'approve'
+  // (which mapped to "y\r" in actionToInput). approve/reject/continue were
+  // removed in cleanup; only `stop` (ESC) remains as a TTY shortcut, since
+  // ESC isn't typeable through input.text trivially.
+  ws.send(JSON.stringify({ type: 'input.text', sessionId: sid, text: 'y\r' }));
 
   // wait for cli exit (with timeout)
   await new Promise((res, rej) => {

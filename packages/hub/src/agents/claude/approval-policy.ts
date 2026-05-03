@@ -53,7 +53,14 @@ export function shouldGatePreToolUse(
    * current contract.
    */
   hasSubscribedClient: boolean = true,
+  /**
+   * When true, the session has been observed using the PermissionRequest
+   * HTTP hook as its real approval gate. PreToolUse should pass through
+   * (return false) so we don't double-gate.
+   */
+  usesPermissionRequest: boolean = false,
 ): boolean {
+  if (usesPermissionRequest)  return false;
   if (policy === 'disabled') return false;
   if (policy === 'always')   return true;
   // policy === 'auto'

@@ -34,6 +34,8 @@ export function diagnosticsSnapshot(deps: DiagnosticsDeps): {
     claudeAllowRules: string[];
     pendingApprovals: number;
     hasSubscribedActionsClient: boolean;
+    usesPermissionRequest: boolean;
+    sessionFilePath?: string;
   }>;
 } {
   return {
@@ -48,6 +50,8 @@ export function diagnosticsSnapshot(deps: DiagnosticsDeps): {
         claudeAllowRules: rec.claudeAllowRules,
         pendingApprovals: deps.approvals.pendingForSession(info.id).length,
         hasSubscribedActionsClient: deps.hasSubscribedActionsClient(info.id),
+        usesPermissionRequest: rec.usesPermissionRequest,
+        ...(rec.sessionFilePath ? { sessionFilePath: rec.sessionFilePath } : {}),
       };
     }),
   };

@@ -104,3 +104,60 @@ describe('SessionRegistry', () => {
     expect(r.setQuietUntil('missing', 1)).toBe(false);
   });
 });
+
+describe('SessionRegistry — usesPermissionRequest', () => {
+  it('newly-registered session has usesPermissionRequest=false', () => {
+    const r = makeReg();
+    r.register({ id: 's', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    expect(r.get('s')!.usesPermissionRequest).toBe(false);
+  });
+  it('markUsesPermissionRequest sets the flag and returns true on first call', () => {
+    const r = makeReg();
+    r.register({ id: 's', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    expect(r.markUsesPermissionRequest('s')).toBe(true);
+    expect(r.get('s')!.usesPermissionRequest).toBe(true);
+  });
+  it('markUsesPermissionRequest returns false when already set (idempotent)', () => {
+    const r = makeReg();
+    r.register({ id: 's', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    r.markUsesPermissionRequest('s');
+    expect(r.markUsesPermissionRequest('s')).toBe(false);
+  });
+  it('markUsesPermissionRequest returns false when session not registered', () => {
+    const r = makeReg();
+    expect(r.markUsesPermissionRequest('missing')).toBe(false);
+  });
+});
+
+describe('SessionRegistry — publicView surfaces sessionFilePath', () => {
+  it('list() includes sessionFilePath when non-empty', () => {
+    const r = makeReg();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/path/to/transcript.jsonl' });
+    expect(r.list()[0]!.sessionFilePath).toBe('/path/to/transcript.jsonl');
+  });
+  it('list() omits sessionFilePath when empty (placeholder not yet replaced by SessionStart)', () => {
+    const r = makeReg();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '' });
+    expect(r.list()[0]!.sessionFilePath).toBeUndefined();
+  });
+  it('emitted session-added view also surfaces it', () => {
+    const r = makeReg();
+    let captured: { sessionFilePath?: string } = {};
+    r.on('session-added', (s) => { captured = s; });
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/p.jsonl' });
+    expect(captured.sessionFilePath).toBe('/p.jsonl');
+  });
+  it('publicView does NOT leak claudeAllowRules / pin / sessionAllowList / etc.', () => {
+    const r = makeReg();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/p.jsonl' });
+    const view = r.list()[0] as Record<string, unknown>;
+    expect('claudeAllowRules' in view).toBe(false);
+    expect('sessionAllowList' in view).toBe(false);
+    expect('pin' in view).toBe(false);
+    expect('quietUntil' in view).toBe(false);
+    expect('sessionGateOverride' in view).toBe(false);
+    expect('usesPermissionRequest' in view).toBe(false);
+    expect('lastHeartbeat' in view).toBe(false);
+    expect('fileTailCursor' in view).toBe(false);
+  });
+});

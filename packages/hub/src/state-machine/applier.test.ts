@@ -32,4 +32,55 @@ describe('wireStateMachine', () => {
     expect(reg.get('s1')!.substate.currentTool).toBeNull();
     expect(reg.get('s1')!.substate.lastTool).toBe('Read');
   });
+  it('SubagentStart sets currentTool=Task', () => {
+    const bus = new EventBus(); const reg = new SessionRegistry();
+    reg.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    reg.updateState('s1', 'running');
+    wireStateMachine({ bus, registry: reg });
+    bus.emit({ eventId: 'e', sessionId: 's1', kind: 'agent-internal', payload: {}, source: 'observer:hook-ingest', ts: 1, nativeEvent: 'SubagentStart' });
+    expect(reg.get('s1')!.substate.currentTool).toBe('Task');
+  });
+  it('SubagentStop clears currentTool, sets lastTool=Task', () => {
+    const bus = new EventBus(); const reg = new SessionRegistry();
+    reg.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    reg.updateState('s1', 'running');
+    reg.patchSubstate('s1', { currentTool: 'Task' });
+    wireStateMachine({ bus, registry: reg });
+    bus.emit({ eventId: 'e', sessionId: 's1', kind: 'agent-internal', payload: {}, source: 'observer:hook-ingest', ts: 1, nativeEvent: 'SubagentStop' });
+    expect(reg.get('s1')!.substate.currentTool).toBeNull();
+    expect(reg.get('s1')!.substate.lastTool).toBe('Task');
+  });
+  it('PreCompact / PostCompact toggle compacting flag', () => {
+    const bus = new EventBus(); const reg = new SessionRegistry();
+    reg.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    reg.updateState('s1', 'running');
+    wireStateMachine({ bus, registry: reg });
+    expect(reg.get('s1')!.substate.compacting).toBe(false);
+    bus.emit({ eventId: 'e', sessionId: 's1', kind: 'agent-internal', payload: {}, source: 'observer:hook-ingest', ts: 1, nativeEvent: 'PreCompact' });
+    expect(reg.get('s1')!.substate.compacting).toBe(true);
+    bus.emit({ eventId: 'e2', sessionId: 's1', kind: 'agent-internal', payload: {}, source: 'observer:hook-ingest', ts: 2, nativeEvent: 'PostCompact' });
+    expect(reg.get('s1')!.substate.compacting).toBe(false);
+  });
+  it('CwdChanged updates substate.cwd from payload', () => {
+    const bus = new EventBus(); const reg = new SessionRegistry();
+    reg.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/orig', pid: 1, sessionFilePath: '/x' });
+    reg.updateState('s1', 'running');
+    wireStateMachine({ bus, registry: reg });
+    expect(reg.get('s1')!.substate.cwd).toBeNull();
+    bus.emit({ eventId: 'e', sessionId: 's1', kind: 'agent-internal', payload: { cwd: '/tmp/new' }, source: 'observer:hook-ingest', ts: 1, nativeEvent: 'CwdChanged' });
+    expect(reg.get('s1')!.substate.cwd).toBe('/tmp/new');
+    // SessionInfo.cwd unchanged (immutable post-register)
+    expect(reg.get('s1')!.cwd).toBe('/orig');
+  });
+  it('Notification / PermissionDenied are pure event-stream — no substate impact', () => {
+    const bus = new EventBus(); const reg = new SessionRegistry();
+    reg.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    reg.updateState('s1', 'running');
+    reg.patchSubstate('s1', { currentTool: 'Bash' });
+    wireStateMachine({ bus, registry: reg });
+    const before = JSON.stringify(reg.get('s1')!.substate);
+    bus.emit({ eventId: 'e1', sessionId: 's1', kind: 'agent-internal', payload: { message: 'attention' }, source: 'observer:hook-ingest', ts: 1, nativeEvent: 'Notification' });
+    bus.emit({ eventId: 'e2', sessionId: 's1', kind: 'agent-internal', payload: { tool_name: 'Bash' }, source: 'observer:hook-ingest', ts: 2, nativeEvent: 'PermissionDenied' });
+    expect(JSON.stringify(reg.get('s1')!.substate)).toBe(before);
+  });
 });

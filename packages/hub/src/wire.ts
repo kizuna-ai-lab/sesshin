@@ -9,6 +9,7 @@ import { Checkpoint } from './registry/checkpoint.js';
 import { EventBus } from './event-bus.js';
 import { wireHookIngest } from './observers/hook-ingest.js';
 import { wireJsonlModeTracker } from './observers/jsonl-mode-tracker.js';
+import { wirePtyIdleWatcher, type IdleWatcherConfig } from './observers/pty-idle-watcher.js';
 import { wireStateMachine } from './state-machine/applier.js';
 import { Dedup } from './observers/dedup.js';
 import { PtyTap } from './observers/pty-tap.js';
@@ -100,6 +101,18 @@ export async function startHub(): Promise<HubInstance> {
   wireStateMachine({ bus: dedupedBus, registry });
   wireJsonlModeTracker({ bus, registry });   // NB: use raw bus, not dedupedBus — agent-internal passes dedup but we don't care
 
+  // ESC-aborted-turn fallback: claude doesn't fire any hook on Esc (its
+  // abort path returns directly without invoking handleStopHooks). Watch
+  // PTY byte rate — when spinner stops the rate drops and we recover
+  // state from running → idle. All five thresholds are env-overridable.
+  const idleWatcherConfig: Partial<IdleWatcherConfig> = {};
+  if (process.env['SESSHIN_PTY_WINDOW_MS'])        idleWatcherConfig.windowMs        = Number(process.env['SESSHIN_PTY_WINDOW_MS']);
+  if (process.env['SESSHIN_PTY_BUCKET_MS'])        idleWatcherConfig.bucketMs        = Number(process.env['SESSHIN_PTY_BUCKET_MS']);
+  if (process.env['SESSHIN_PTY_HIGH_BYTES_PER_S']) idleWatcherConfig.highBytesPerSec = Number(process.env['SESSHIN_PTY_HIGH_BYTES_PER_S']);
+  if (process.env['SESSHIN_PTY_LOW_BYTES_PER_S'])  idleWatcherConfig.lowBytesPerSec  = Number(process.env['SESSHIN_PTY_LOW_BYTES_PER_S']);
+  if (process.env['SESSHIN_PTY_CONFIRM_MS'])       idleWatcherConfig.confirmMs       = Number(process.env['SESSHIN_PTY_CONFIRM_MS']);
+  const ptyIdleWatcher = wirePtyIdleWatcher({ tap, registry, config: idleWatcherConfig });
+
   // Hook ingest with sessionFilePath fixup. claude's SessionStart hook
   // delivers the real `transcript_path` (a UUID-named JSONL); the CLI
   // cannot know that path at register time, so it registers a placeholder
@@ -182,10 +195,14 @@ export async function startHub(): Promise<HubInstance> {
       // claude follows its native permission logic instead of waiting on a
       // ghost remote.
       const hasSubscribedClient = wsRef?.hasSubscribedActionsClient(env.sessionId) ?? false;
+      // Once a PermissionRequest HTTP hook has been observed for this session,
+      // PreToolUse short-circuits: the real gate is somewhere else. Stops us
+      // from double-gating the same tool call.
+      const usesPR = registry.get(env.sessionId)?.usesPermissionRequest === true;
       if (!shouldGatePreToolUse(env.raw, knownMode, policyForCall, {
         sessionAllowList: session?.sessionAllowList ?? [],
         claudeAllowRules: session?.claudeAllowRules ?? [],
-      }, hasSubscribedClient)) return null;
+      }, hasSubscribedClient, usesPR)) return null;
       const tool = typeof env.raw['tool_name'] === 'string' ? env.raw['tool_name'] : 'unknown';
       const rawInput = env.raw['tool_input'];
       const toolInput: Record<string, unknown> =
@@ -229,13 +246,98 @@ export async function startHub(): Promise<HubInstance> {
 
       pendingHandlers.set(request.requestId, { handler, ctx, toolInput, tool });
 
-      const out = await decision;
-      // Whichever path ended the approval, restore the session to running so
-      // the laptop and remote can keep typing.
-      registry.updateState(env.sessionId, 'running');
-      const ui = pendingUpdatedInput.get(request.requestId);
-      pendingUpdatedInput.delete(request.requestId);
+      // Use try/finally so pendingHandlers + pendingUpdatedInput are always
+      // cleaned up — including the stale-cleanup, timeout, and session-end
+      // paths where the resolution doesn't come back through onPromptResponse.
+      // Without this, those paths leaked the slot in the Map indefinitely.
+      let out: import('./approval-manager.js').ApprovalOutcome;
+      let ui: Record<string, unknown> | undefined;
+      try {
+        out = await decision;
+        // Whichever path ended the approval, restore the session to running so
+        // the laptop and remote can keep typing.
+        registry.updateState(env.sessionId, 'running');
+        ui = pendingUpdatedInput.get(request.requestId);
+      } finally {
+        pendingHandlers.delete(request.requestId);
+        pendingUpdatedInput.delete(request.requestId);
+      }
       return { ...out, ...(ui ? { updatedInput: ui } : {}) };
+    },
+    onPermissionRequestApproval: async (env) => {
+      // PermissionRequest is Claude Code's authoritative approval gate.
+      // It arrives as an HTTP hook (Claude POSTs the payload directly to
+      // the hub), shape distinct from PreToolUse — no `ask`, decision
+      // is an object {behavior, ...}.
+      const session = registry.get(env.sessionId);
+      const knownMode = session?.substate.permissionMode;
+      const tool = typeof env.raw['tool_name'] === 'string' ? env.raw['tool_name'] : 'unknown';
+      const rawInput = env.raw['tool_input'];
+      const toolInput: Record<string, unknown> =
+        rawInput !== null && typeof rawInput === 'object'
+          ? (rawInput as Record<string, unknown>)
+          : {};
+      const toolUseId = typeof env.raw['tool_use_id'] === 'string' ? env.raw['tool_use_id'] : undefined;
+
+      setCatchAllToolName(tool);
+      const handler = getHandler(tool);
+      const ctx: HandlerCtx = {
+        permissionMode: knownMode ?? 'default',
+        cwd: session?.cwd ?? process.cwd(),
+        sessionAllowList: session?.sessionAllowList ?? [],
+      };
+      const rendered = handler.render(toolInput, ctx);
+
+      const { request, decision } = approvals.open({
+        sessionId: env.sessionId, tool, toolInput,
+        ...(toolUseId !== undefined ? { toolUseId } : {}),
+        onExpire: (a) => {
+          wsRef?.broadcast({
+            type: 'session.prompt-request.resolved',
+            sessionId: a.sessionId, requestId: a.requestId, reason: 'timeout',
+          });
+        },
+      });
+
+      registry.updateState(env.sessionId, 'awaiting-confirmation');
+      wsRef?.broadcast({
+        type: 'session.prompt-request',
+        sessionId: env.sessionId,
+        requestId: request.requestId,
+        origin: rendered.origin ?? 'permission',
+        toolName: tool,
+        ...(toolUseId !== undefined ? { toolUseId } : {}),
+        expiresAt: request.expiresAt,
+        ...(rendered.body !== undefined ? { body: rendered.body } : {}),
+        questions: rendered.questions,
+      });
+
+      pendingHandlers.set(request.requestId, { handler, ctx, toolInput, tool });
+
+      // Mirror of the PreToolUse adapter's try/finally — guarantees cleanup
+      // on stale-cleanup / timeout / session-end paths too.
+      let out: import('./approval-manager.js').ApprovalOutcome;
+      let ui: Record<string, unknown> | undefined;
+      try {
+        out = await decision;
+        registry.updateState(env.sessionId, 'running');
+        ui = pendingUpdatedInput.get(request.requestId);
+      } finally {
+        pendingHandlers.delete(request.requestId);
+        pendingUpdatedInput.delete(request.requestId);
+      }
+
+      // Map ApprovalOutcome → PermissionRequest decision shape:
+      //   allow → { behavior: 'allow', updatedInput? }
+      //   deny  → { behavior: 'deny', message? } (reason becomes message)
+      //   ask   → null (passthrough; PermissionRequest has no 'ask' kind)
+      if (out.decision === 'allow') {
+        return { behavior: 'allow', ...(ui ? { updatedInput: ui } : {}) };
+      }
+      if (out.decision === 'deny') {
+        return { behavior: 'deny', ...(out.reason !== undefined ? { message: out.reason } : {}) };
+      }
+      return null;
     },
   });
   await rest.listen(config.internalPort, config.internalHost);
@@ -392,6 +494,7 @@ export async function startHub(): Promise<HubInstance> {
   return {
     rest, ws, registry, bus, tap, bridge,
     shutdown: async () => {
+      ptyIdleWatcher.stop();
       for (const off of rawSubscriptions.values()) off();
       for (const s of stopTails.values()) s();
       checkpoint.stop();

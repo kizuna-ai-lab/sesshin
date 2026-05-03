@@ -21,3 +21,35 @@ describe('exitPlanModeHandler', () => {
     expect(d).toEqual({ kind: 'deny', additionalContext: 'change Y to Z first' });
   });
 });
+
+describe('exitPlanModeHandler — PermissionRequest decision-shape mapping invariants', () => {
+  // The wire.ts onPermissionRequestApproval adapter (T15) maps HookDecision
+  // to PermissionRequest-shape JSON. Here we verify the kinds and fields
+  // the handler produces are exactly what that adapter expects.
+  const c = { permissionMode: 'default' as const, cwd: '/', sessionAllowList: [] };
+  it('yes-default → kind:allow (adapter → behavior:"allow")', () => {
+    expect(exitPlanModeHandler.decide(
+      [{ questionIndex: 0, selectedKeys: ['yes-default'] }], { plan: 'p' }, c,
+    )).toEqual({ kind: 'allow' });
+  });
+  it('yes-accept-edits → kind:allow (adapter → behavior:"allow")', () => {
+    expect(exitPlanModeHandler.decide(
+      [{ questionIndex: 0, selectedKeys: ['yes-accept-edits'] }], { plan: 'p' }, c,
+    )).toEqual({ kind: 'allow' });
+  });
+  it('no with freeText → kind:deny + additionalContext (adapter → behavior:"deny" + message)', () => {
+    expect(exitPlanModeHandler.decide(
+      [{ questionIndex: 0, selectedKeys: ['no'], freeText: 'try X' }], { plan: 'p' }, c,
+    )).toEqual({ kind: 'deny', additionalContext: 'try X' });
+  });
+  it('no without freeText → plain kind:deny (adapter → behavior:"deny" w/o message)', () => {
+    expect(exitPlanModeHandler.decide(
+      [{ questionIndex: 0, selectedKeys: ['no'] }], { plan: 'p' }, c,
+    )).toEqual({ kind: 'deny' });
+  });
+  it('unrecognized selectedKey → kind:ask (adapter → null passthrough)', () => {
+    expect(exitPlanModeHandler.decide(
+      [{ questionIndex: 0, selectedKeys: ['bogus'] }], { plan: 'p' }, c,
+    )).toEqual({ kind: 'ask' });
+  });
+});

@@ -26,6 +26,16 @@ describe('hookEnvelopeToEvent', () => {
       raw: { nativeEvent: 'PostToolUse', tool_name: 'Bash', tool_response: 'ok' },
     });
     expect(e.kind).toBe('tool-result');
+    expect(e.payload['failed']).toBeUndefined();
+  });
+  it('PostToolUseFailure → tool-result with failed:true (was falling through to agent-internal)', () => {
+    const e = hookEnvelopeToEvent({
+      agent: 'claude-code', sessionId: 's1', ts: 1, event: 'PostToolUseFailure',
+      raw: { nativeEvent: 'PostToolUseFailure', tool_name: 'Bash', tool_response: 'oops' },
+    });
+    expect(e.kind).toBe('tool-result');
+    expect(e.payload).toMatchObject({ tool: 'Bash', result: 'oops', failed: true });
+    expect(e.nativeEvent).toBe('PostToolUseFailure');
   });
   it('Stop → agent-output', () => {
     const e = hookEnvelopeToEvent({
@@ -47,5 +57,63 @@ describe('hookEnvelopeToEvent', () => {
       raw: { nativeEvent: 'WeirdNewEvent' },
     });
     expect(e.kind).toBe('agent-internal');
+  });
+  it('Notification → agent-internal, nativeEvent preserved', () => {
+    const e = hookEnvelopeToEvent({
+      agent: 'claude-code', sessionId: 's1', ts: 1, event: 'Notification',
+      raw: { message: 'awaiting permission', notification_type: 'permission-wait' },
+    });
+    expect(e.kind).toBe('agent-internal');
+    expect(e.nativeEvent).toBe('Notification');
+    expect(e.payload).toMatchObject({ message: 'awaiting permission' });
+  });
+  it('PermissionDenied → agent-internal', () => {
+    const e = hookEnvelopeToEvent({
+      agent: 'claude-code', sessionId: 's1', ts: 1, event: 'PermissionDenied',
+      raw: { tool_name: 'Bash' },
+    });
+    expect(e.kind).toBe('agent-internal');
+    expect(e.nativeEvent).toBe('PermissionDenied');
+  });
+  it('SubagentStart → agent-internal with nativeEvent SubagentStart', () => {
+    const e = hookEnvelopeToEvent({
+      agent: 'claude-code', sessionId: 's1', ts: 1, event: 'SubagentStart',
+      raw: { agent_type: 'general-purpose' },
+    });
+    expect(e.kind).toBe('agent-internal');
+    expect(e.nativeEvent).toBe('SubagentStart');
+  });
+  it('SubagentStop → agent-internal with nativeEvent SubagentStop', () => {
+    const e = hookEnvelopeToEvent({
+      agent: 'claude-code', sessionId: 's1', ts: 1, event: 'SubagentStop',
+      raw: {},
+    });
+    expect(e.kind).toBe('agent-internal');
+    expect(e.nativeEvent).toBe('SubagentStop');
+  });
+  it('PreCompact → agent-internal', () => {
+    const e = hookEnvelopeToEvent({
+      agent: 'claude-code', sessionId: 's1', ts: 1, event: 'PreCompact',
+      raw: {},
+    });
+    expect(e.kind).toBe('agent-internal');
+    expect(e.nativeEvent).toBe('PreCompact');
+  });
+  it('PostCompact → agent-internal', () => {
+    const e = hookEnvelopeToEvent({
+      agent: 'claude-code', sessionId: 's1', ts: 1, event: 'PostCompact',
+      raw: {},
+    });
+    expect(e.kind).toBe('agent-internal');
+    expect(e.nativeEvent).toBe('PostCompact');
+  });
+  it('CwdChanged → agent-internal with cwd in payload', () => {
+    const e = hookEnvelopeToEvent({
+      agent: 'claude-code', sessionId: 's1', ts: 1, event: 'CwdChanged',
+      raw: { cwd: '/tmp/new' },
+    });
+    expect(e.kind).toBe('agent-internal');
+    expect(e.payload).toMatchObject({ cwd: '/tmp/new' });
+    expect(e.nativeEvent).toBe('CwdChanged');
   });
 });

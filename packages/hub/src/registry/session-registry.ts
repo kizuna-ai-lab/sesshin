@@ -16,6 +16,8 @@ function defaultSubstate(): Substate {
     elapsedSinceProgressMs: 0, tokensUsedTurn: null,
     connectivity: 'ok', stalled: false,
     permissionMode: 'default',
+    compacting: false,
+    cwd: null,
   };
 }
 
@@ -35,6 +37,12 @@ export interface SessionRecord extends SessionInfo {
   sessionGateOverride: 'disabled' | 'auto' | 'always' | null;
   pin: string | null;
   quietUntil: number | null;
+  /**
+   * True once a PermissionRequest HTTP hook has been observed for this session.
+   * Sticky for the lifetime of the session — once the real approval gate is
+   * known to be wired, sesshin's PreToolUse adapter passes through.
+   */
+  usesPermissionRequest: boolean;
 }
 
 export class SessionRegistry extends EventEmitter {
@@ -59,6 +67,7 @@ export class SessionRegistry extends EventEmitter {
       sessionGateOverride: null,
       pin: null,
       quietUntil: null,
+      usesPermissionRequest: false,
     };
     this.sessions.set(rec.id, rec);
     this.emit('session-added', this.publicView(rec));
@@ -187,14 +196,34 @@ export class SessionRegistry extends EventEmitter {
     return this.sessions.get(id)?.quietUntil ?? null;
   }
 
+  /**
+   * Mark a session as using the PermissionRequest HTTP hook as its real
+   * approval gate. Once set the flag is sticky for the session lifetime.
+   * Returns true iff this call changed the flag from false→true.
+   */
+  markUsesPermissionRequest(id: string): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    if (s.usesPermissionRequest) return false;
+    s.usesPermissionRequest = true;
+    return true;
+  }
+
   private publicView(s: SessionRecord): SessionInfo {
     const {
-      sessionFilePath: _f, fileTailCursor: _c, lastHeartbeat: _h,
+      // Stripped fields (private to the hub):
+      fileTailCursor: _c, lastHeartbeat: _h,
       claudeAllowRules: _a, sessionAllowList: _l,
       sessionGateOverride: _g, pin: _p, quietUntil: _q,
+      usesPermissionRequest: _u,
+      // Surfaced fields stay in `pub`:
+      sessionFilePath,
       ...pub
     } = s;
-    return pub;
+    // sessionFilePath is meaningful only when set (CLI register passes a
+    // placeholder before SessionStart fixes it up). Surface only when
+    // non-empty so client UIs don't show "/x" placeholders.
+    return sessionFilePath ? { ...pub, sessionFilePath } : pub;
   }
 
   override emit<K extends keyof RegistryEvents>(event: K, ...args: Parameters<RegistryEvents[K]>): boolean {

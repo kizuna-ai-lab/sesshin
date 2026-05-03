@@ -24,5 +24,32 @@ function apply(e: NormalizedEvent, registry: SessionRegistry): void {
   } else if (e.kind === 'tool-result') {
     const tool = (e.payload['tool'] as string | undefined) ?? null;
     registry.patchSubstate(e.sessionId, { currentTool: null, lastTool: tool });
+  } else if (e.kind === 'agent-internal') {
+    // claude >= 2.1 hooks. Dispatch on nativeEvent (auto-filled from env.event
+    // by hookEnvelopeToEvent). state stays where transitionFor put it; only
+    // substate is updated here.
+    switch (e.nativeEvent) {
+      case 'SubagentStart':
+        registry.patchSubstate(e.sessionId, { currentTool: 'Task' });
+        break;
+      case 'SubagentStop':
+        registry.patchSubstate(e.sessionId, { currentTool: null, lastTool: 'Task' });
+        break;
+      case 'PreCompact':
+        registry.patchSubstate(e.sessionId, { compacting: true });
+        break;
+      case 'PostCompact':
+        registry.patchSubstate(e.sessionId, { compacting: false });
+        break;
+      case 'CwdChanged': {
+        const cwd = e.payload['cwd'];
+        if (typeof cwd === 'string') {
+          registry.patchSubstate(e.sessionId, { cwd });
+        }
+        break;
+      }
+      // Notification / PermissionDenied: pure event-stream, no substate impact
+      // (clients consume via session.event broadcast).
+    }
   }
 }

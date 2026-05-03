@@ -15,18 +15,35 @@ describe('session schemas', () => {
       lastCommandRun: null, elapsedSinceProgressMs: 0,
       tokensUsedTurn: null, connectivity: 'ok', stalled: false,
       permissionMode: 'default',
+      compacting: false,
+      cwd: null,
     };
     expect(SubstateSchema.parse(s)).toEqual(s);
+  });
+  it('Substate fills compacting/cwd defaults when missing (back-compat with old checkpoints)', () => {
+    const old = {
+      currentTool: null, lastTool: null, lastFileTouched: null, lastCommandRun: null,
+      elapsedSinceProgressMs: 0, tokensUsedTurn: null,
+      connectivity: 'ok' as const, stalled: false,
+      permissionMode: 'default' as const,
+    };
+    expect(SubstateSchema.parse(old)).toMatchObject({ compacting: false, cwd: null });
   });
   it('SessionInfo requires all fields', () => {
     expect(() => SessionInfoSchema.parse({ id: 'x' })).toThrow();
   });
 });
 describe('actions', () => {
-  it('accepts the 10 reserved action names', () => {
-    for (const a of ['continue','stop','retry','fix','summarize','details','ignore','snooze','approve','reject']) {
-      expect(ActionEnum.parse(a)).toBe(a);
+  it('accepts the lone TTY-shortcut "stop"', () => {
+    expect(ActionEnum.parse('stop')).toBe('stop');
+  });
+  it('rejects every name removed in cleanup', () => {
+    const removed = ['approve','reject','continue','retry','fix','summarize','details','ignore','snooze'];
+    for (const dead of removed) {
+      expect(() => ActionEnum.parse(dead)).toThrow();
     }
+  });
+  it('rejects unknown names', () => {
     expect(() => ActionEnum.parse('detonate')).toThrow();
   });
 });

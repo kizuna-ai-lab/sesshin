@@ -8,6 +8,7 @@ import { runTrust } from './subcommands/trust.js';
 import { runGate } from './subcommands/gate.js';
 import { runPin } from './subcommands/pin.js';
 import { runQuiet } from './subcommands/quiet.js';
+import { runLog } from './subcommands/log.js';
 
 async function main(): Promise<number | null> {
   const [cmd, ...rest] = process.argv.slice(2);
@@ -69,8 +70,18 @@ async function main(): Promise<number | null> {
       const dur = positional[0] ?? null;
       return runQuiet({ sessionId: sid, duration: dur });
     }
+    case 'log': {
+      const sid = pickFlag(rest, '--session');
+      const filter = pickFlag(rest, '--filter');
+      return runLog({
+        ...(sid ? { sessionId: sid } : {}),
+        tail:   rest.includes('--tail'),
+        json:   rest.includes('--json'),
+        ...(filter ? { filter } : {}),
+      });
+    }
     default:
-      process.stderr.write(`usage: sesshin <claude|status|clients|history|commands|trust|gate|pin|quiet> ...\n`);
+      process.stderr.write(`usage: sesshin <claude|status|clients|history|commands|trust|gate|pin|quiet|log> ...\n`);
       return 2;
   }
 }

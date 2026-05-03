@@ -56,6 +56,35 @@ describe('GET /api/diagnostics', () => {
     const j = await r.json();
     expect(j.sessions[0].pendingApprovals).toBe(1);
   });
+  it('exposes usesPermissionRequest=false for fresh session', async () => {
+    registry.register({ id: 's2', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const j = await r.json();
+    const s = j.sessions.find((x: { id: string }) => x.id === 's2')!;
+    expect(s.usesPermissionRequest).toBe(false);
+  });
+  it('flips to true after registry.markUsesPermissionRequest', async () => {
+    registry.register({ id: 's3', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    registry.markUsesPermissionRequest('s3');
+    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const j = await r.json();
+    const s = j.sessions.find((x: { id: string }) => x.id === 's3')!;
+    expect(s.usesPermissionRequest).toBe(true);
+  });
+  it('exposes sessionFilePath when set', async () => {
+    registry.register({ id: 's4', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/abs/path/to/transcript.jsonl' });
+    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const j = await r.json();
+    const s = j.sessions.find((x: { id: string }) => x.id === 's4')!;
+    expect(s.sessionFilePath).toBe('/abs/path/to/transcript.jsonl');
+  });
+  it('omits sessionFilePath when not set', async () => {
+    registry.register({ id: 's5', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '' });
+    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const j = await r.json();
+    const s = j.sessions.find((x: { id: string }) => x.id === 's5')!;
+    expect('sessionFilePath' in s).toBe(false);
+  });
 });
 
 describe('GET /api/sessions/:id/clients', () => {
