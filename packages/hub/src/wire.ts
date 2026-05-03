@@ -9,6 +9,7 @@ import { Checkpoint } from './registry/checkpoint.js';
 import { EventBus } from './event-bus.js';
 import { wireHookIngest } from './observers/hook-ingest.js';
 import { wireJsonlModeTracker } from './observers/jsonl-mode-tracker.js';
+import { wirePtyIdleWatcher, type IdleWatcherConfig } from './observers/pty-idle-watcher.js';
 import { wireStateMachine } from './state-machine/applier.js';
 import { Dedup } from './observers/dedup.js';
 import { PtyTap } from './observers/pty-tap.js';
@@ -99,6 +100,18 @@ export async function startHub(): Promise<HubInstance> {
   });
   wireStateMachine({ bus: dedupedBus, registry });
   wireJsonlModeTracker({ bus, registry });   // NB: use raw bus, not dedupedBus — agent-internal passes dedup but we don't care
+
+  // ESC-aborted-turn fallback: claude doesn't fire any hook on Esc (its
+  // abort path returns directly without invoking handleStopHooks). Watch
+  // PTY byte rate — when spinner stops the rate drops and we recover
+  // state from running → idle. All five thresholds are env-overridable.
+  const idleWatcherConfig: Partial<IdleWatcherConfig> = {};
+  if (process.env['SESSHIN_PTY_WINDOW_MS'])        idleWatcherConfig.windowMs        = Number(process.env['SESSHIN_PTY_WINDOW_MS']);
+  if (process.env['SESSHIN_PTY_BUCKET_MS'])        idleWatcherConfig.bucketMs        = Number(process.env['SESSHIN_PTY_BUCKET_MS']);
+  if (process.env['SESSHIN_PTY_HIGH_BYTES_PER_S']) idleWatcherConfig.highBytesPerSec = Number(process.env['SESSHIN_PTY_HIGH_BYTES_PER_S']);
+  if (process.env['SESSHIN_PTY_LOW_BYTES_PER_S'])  idleWatcherConfig.lowBytesPerSec  = Number(process.env['SESSHIN_PTY_LOW_BYTES_PER_S']);
+  if (process.env['SESSHIN_PTY_CONFIRM_MS'])       idleWatcherConfig.confirmMs       = Number(process.env['SESSHIN_PTY_CONFIRM_MS']);
+  const ptyIdleWatcher = wirePtyIdleWatcher({ tap, registry, config: idleWatcherConfig });
 
   // Hook ingest with sessionFilePath fixup. claude's SessionStart hook
   // delivers the real `transcript_path` (a UUID-named JSONL); the CLI
@@ -481,6 +494,7 @@ export async function startHub(): Promise<HubInstance> {
   return {
     rest, ws, registry, bus, tap, bridge,
     shutdown: async () => {
+      ptyIdleWatcher.stop();
       for (const off of rawSubscriptions.values()) off();
       for (const s of stopTails.values()) s();
       checkpoint.stop();
