@@ -151,6 +151,31 @@ describe('ApprovalManager — resolveByFingerprint', () => {
   });
 });
 
+describe('ApprovalManager — resolveSingletonForSession', () => {
+  it('resolves the only pending entry for a session, returns 1', async () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    const { decision } = m.open({ sessionId: 's', tool: 'Bash', toolInput: {} });
+    expect(m.resolveSingletonForSession('s', { decision: 'deny', reason: 'r' })).toBe(1);
+    await expect(decision).resolves.toEqual({ decision: 'deny', reason: 'r' });
+  });
+  it('returns 0 when 0 pending entries', () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    expect(m.resolveSingletonForSession('s', { decision: 'ask' })).toBe(0);
+  });
+  it('returns 0 when 2+ pending entries (ambiguous)', () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    m.open({ sessionId: 's', tool: 'Bash', toolInput: {} });
+    m.open({ sessionId: 's', tool: 'Edit', toolInput: {} });
+    expect(m.resolveSingletonForSession('s', { decision: 'ask' })).toBe(0);
+  });
+  it('only counts entries for the given session', () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    m.open({ sessionId: 's1', tool: 'Bash', toolInput: {} });
+    m.open({ sessionId: 's2', tool: 'Bash', toolInput: {} });
+    expect(m.resolveSingletonForSession('s1', { decision: 'allow' })).toBe(1);
+  });
+});
+
 describe('ApprovalManager — toolInputFingerprint', () => {
   it('open() populates toolInputFingerprint on the public PendingApproval', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });

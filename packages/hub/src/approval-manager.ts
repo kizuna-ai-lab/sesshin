@@ -148,6 +148,24 @@ export class ApprovalManager {
   }
 
   /**
+   * Resolve the unique pending approval for a session, if there is exactly one.
+   * Returns 1 if resolved, else 0.
+   *
+   * Used as last-resort cleanup on `Stop` events when no toolUseId / fingerprint
+   * match is available — it's safe because Claude only emits one Stop per turn.
+   */
+  resolveSingletonForSession(sessionId: string, outcome: ApprovalOutcome): 0 | 1 {
+    let candidate: string | null = null;
+    for (const [rid, e] of this.pending) {
+      if (e.sessionId !== sessionId) continue;
+      if (candidate !== null) return 0;
+      candidate = rid;
+    }
+    if (candidate === null) return 0;
+    return this.decide(candidate, outcome) ? 1 : 0;
+  }
+
+  /**
    * Cancel any pending requests for a session (e.g., session unregistered).
    * Resolves them with `decision: 'ask'` so the originating hook unblocks.
    *
