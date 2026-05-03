@@ -1,6 +1,6 @@
 # PermissionRequest Hook + Schema Split — Design
 
-**Status:** Design / pending implementation
+**Status:** Implemented (v1.5.x — worktree-permission-request, PR #1)
 **Scope:** Sesshin v1.5.x — adds a real PermissionRequest approval path alongside today's PreToolUse path, with three-tier stale cleanup, and a Codex sanitizer scaffold.
 **Touches:** `packages/shared`, `packages/hub`, `packages/cli`, `tests` (unit + e2e).
 **Branch:** `worktree-permission-request` (worktree at `.claude/worktrees/permission-request`).

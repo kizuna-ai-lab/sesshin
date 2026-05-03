@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { fingerprintToolInput, normalizeToolInput } from './tool-fingerprint.js';
 
 describe('tool-fingerprint', () => {
-  it('returns 40-char hex sha1', () => {
+  it('returns 64-char hex sha256', () => {
     const fp = fingerprintToolInput({ a: 1 });
-    expect(fp).toMatch(/^[0-9a-f]{40}$/);
+    expect(fp).toMatch(/^[0-9a-f]{64}$/);
   });
   it('is stable across object key reorder', () => {
     const a = fingerprintToolInput({ x: 1, y: 2, z: 3 });
@@ -38,14 +38,14 @@ describe('tool-fingerprint', () => {
     let nested: unknown = 'leaf';
     for (let i = 0; i < 10; i += 1) nested = { wrap: nested };
     const fp = fingerprintToolInput(nested);
-    expect(fp).toMatch(/^[0-9a-f]{40}$/);
+    expect(fp).toMatch(/^[0-9a-f]{64}$/);
   });
   it('handles primitives and null', () => {
-    expect(fingerprintToolInput(null)).toMatch(/^[0-9a-f]{40}$/);
-    expect(fingerprintToolInput(42)).toMatch(/^[0-9a-f]{40}$/);
-    expect(fingerprintToolInput(true)).toMatch(/^[0-9a-f]{40}$/);
+    expect(fingerprintToolInput(null)).toMatch(/^[0-9a-f]{64}$/);
+    expect(fingerprintToolInput(42)).toMatch(/^[0-9a-f]{64}$/);
+    expect(fingerprintToolInput(true)).toMatch(/^[0-9a-f]{64}$/);
   });
   it('handles non-object inputs without crashing', () => {
-    expect(fingerprintToolInput(undefined)).toMatch(/^[0-9a-f]{40}$/);
+    expect(fingerprintToolInput(undefined)).toMatch(/^[0-9a-f]{64}$/);
   });
 });

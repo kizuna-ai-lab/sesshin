@@ -35,8 +35,15 @@ export function normalizeToolInput(value: unknown, depth = 0): unknown {
   return value ?? null;
 }
 
-/** sha1 hex digest of the JSON-serialized normalized value. Always 40 hex chars. */
+/**
+ * sha256 hex digest of the JSON-serialized normalized value. Always 64 hex chars.
+ *
+ * Note: this is a *matching* fingerprint, not a cryptographic boundary —
+ * never persisted, never shared between processes, used only for in-memory
+ * pending-request lookup in ApprovalManager. Either sha1 or sha256 works
+ * fine; sha256 picked for defensive parity with broader codebase hashing.
+ */
 export function fingerprintToolInput(input: unknown): string {
   const norm = normalizeToolInput(input);
-  return createHash('sha1').update(JSON.stringify(norm)).digest('hex');
+  return createHash('sha256').update(JSON.stringify(norm)).digest('hex');
 }

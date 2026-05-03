@@ -15,7 +15,12 @@ export function sanitizeCodexPermissionDecision(
   d: PermissionRequestDecision,
 ): PermissionRequestDecision {
   if (d.behavior === 'allow') return { behavior: 'allow' };
-  return d.message ? { behavior: 'deny', message: d.message } : { behavior: 'deny' };
+  // Use `!== undefined` rather than a truthy check so an explicitly empty
+  // string is preserved (the schema allows `message: ''` and the contract
+  // is "deny may carry message", not "deny may carry non-empty message").
+  return d.message !== undefined
+    ? { behavior: 'deny', message: d.message }
+    : { behavior: 'deny' };
 }
 
 /**

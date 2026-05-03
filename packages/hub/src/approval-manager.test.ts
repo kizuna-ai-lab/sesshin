@@ -137,7 +137,7 @@ describe('ApprovalManager — resolveByFingerprint', () => {
   });
   it('returns 0 when no fingerprint match', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
-    expect(m.resolveByFingerprint('s', 'Bash', 'a'.repeat(40), { decision: 'ask' })).toBe(0);
+    expect(m.resolveByFingerprint('s', 'Bash', 'a'.repeat(64), { decision: 'ask' })).toBe(0);
   });
   it('returns 0 when toolName differs', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
@@ -212,7 +212,7 @@ describe('ApprovalManager — toolInputFingerprint', () => {
   it('open() populates toolInputFingerprint on the public PendingApproval', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
     const { request } = m.open({ sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' } });
-    expect(request.toolInputFingerprint).toMatch(/^[0-9a-f]{40}$/);
+    expect(request.toolInputFingerprint).toMatch(/^[0-9a-f]{64}$/);
   });
   it('two open() calls with identical toolInput produce identical fingerprints', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });

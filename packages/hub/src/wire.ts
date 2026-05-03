@@ -233,12 +233,22 @@ export async function startHub(): Promise<HubInstance> {
 
       pendingHandlers.set(request.requestId, { handler, ctx, toolInput, tool });
 
-      const out = await decision;
-      // Whichever path ended the approval, restore the session to running so
-      // the laptop and remote can keep typing.
-      registry.updateState(env.sessionId, 'running');
-      const ui = pendingUpdatedInput.get(request.requestId);
-      pendingUpdatedInput.delete(request.requestId);
+      // Use try/finally so pendingHandlers + pendingUpdatedInput are always
+      // cleaned up — including the stale-cleanup, timeout, and session-end
+      // paths where the resolution doesn't come back through onPromptResponse.
+      // Without this, those paths leaked the slot in the Map indefinitely.
+      let out: import('./approval-manager.js').ApprovalOutcome;
+      let ui: Record<string, unknown> | undefined;
+      try {
+        out = await decision;
+        // Whichever path ended the approval, restore the session to running so
+        // the laptop and remote can keep typing.
+        registry.updateState(env.sessionId, 'running');
+        ui = pendingUpdatedInput.get(request.requestId);
+      } finally {
+        pendingHandlers.delete(request.requestId);
+        pendingUpdatedInput.delete(request.requestId);
+      }
       return { ...out, ...(ui ? { updatedInput: ui } : {}) };
     },
     onPermissionRequestApproval: async (env) => {
@@ -291,10 +301,18 @@ export async function startHub(): Promise<HubInstance> {
 
       pendingHandlers.set(request.requestId, { handler, ctx, toolInput, tool });
 
-      const out = await decision;
-      registry.updateState(env.sessionId, 'running');
-      const ui = pendingUpdatedInput.get(request.requestId);
-      pendingUpdatedInput.delete(request.requestId);
+      // Mirror of the PreToolUse adapter's try/finally — guarantees cleanup
+      // on stale-cleanup / timeout / session-end paths too.
+      let out: import('./approval-manager.js').ApprovalOutcome;
+      let ui: Record<string, unknown> | undefined;
+      try {
+        out = await decision;
+        registry.updateState(env.sessionId, 'running');
+        ui = pendingUpdatedInput.get(request.requestId);
+      } finally {
+        pendingHandlers.delete(request.requestId);
+        pendingUpdatedInput.delete(request.requestId);
+      }
 
       // Map ApprovalOutcome → PermissionRequest decision shape:
       //   allow → { behavior: 'allow', updatedInput? }

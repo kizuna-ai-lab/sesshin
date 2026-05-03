@@ -92,7 +92,7 @@ describe('hook-events — PermissionRequest + PostToolUseFailure', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-```
+```bash
 pnpm --filter @sesshin/shared exec vitest run src/hook-events.test.ts
 ```
 
@@ -134,7 +134,7 @@ export function normalizeClaudeEvent(native: string): NormalizedHookEvent {
 
 - [ ] **Step 4: Verify tests pass**
 
-```
+```bash
 pnpm --filter @sesshin/shared exec vitest run src/hook-events.test.ts
 ```
 
@@ -142,7 +142,7 @@ Expected: all PASS.
 
 - [ ] **Step 5: Build shared so downstream sees new exports**
 
-```
+```bash
 pnpm --filter @sesshin/shared build
 ```
 
@@ -226,7 +226,7 @@ describe('tool-fingerprint', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-```
+```bash
 pnpm --filter @sesshin/shared exec vitest run src/tool-fingerprint.test.ts
 ```
 
@@ -291,7 +291,7 @@ export * from './tool-fingerprint.js';
 
 - [ ] **Step 5: Verify tests pass**
 
-```
+```bash
 pnpm --filter @sesshin/shared exec vitest run src/tool-fingerprint.test.ts
 ```
 
@@ -299,7 +299,7 @@ Expected: 9 tests PASS.
 
 - [ ] **Step 6: Build**
 
-```
+```bash
 pnpm --filter @sesshin/shared build
 ```
 
@@ -386,7 +386,7 @@ export * from './permission.js';
 
 - [ ] **Step 3: Build**
 
-```
+```bash
 pnpm --filter @sesshin/shared build
 ```
 
@@ -437,7 +437,7 @@ describe('ApprovalManager — toolInputFingerprint', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/approval-manager.test.ts
 ```
 
@@ -488,7 +488,7 @@ Edit `packages/hub/src/approval-manager.ts`:
 
 - [ ] **Step 4: Verify tests pass**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/approval-manager.test.ts
 ```
 
@@ -551,7 +551,7 @@ describe('ApprovalManager — resolveByToolUseId', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/approval-manager.test.ts
 ```
 
@@ -615,7 +615,7 @@ Edit `packages/hub/src/approval-manager.ts`:
 
 - [ ] **Step 4: Verify tests pass**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/approval-manager.test.ts
 ```
 
@@ -683,7 +683,7 @@ describe('ApprovalManager — resolveByFingerprint', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/approval-manager.test.ts
 ```
 
@@ -750,7 +750,7 @@ Edit `packages/hub/src/approval-manager.ts`:
 
 - [ ] **Step 4: Verify all tests pass (old + new)**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/approval-manager.test.ts
 ```
 
@@ -805,7 +805,7 @@ describe('ApprovalManager — resolveSingletonForSession', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/approval-manager.test.ts
 ```
 
@@ -837,7 +837,7 @@ resolveSingletonForSession(sessionId: string, outcome: ApprovalOutcome): 0 | 1 {
 
 - [ ] **Step 4: Verify tests pass**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/approval-manager.test.ts
 ```
 
@@ -893,7 +893,7 @@ describe('SessionRegistry — usesPermissionRequest', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/registry/session-registry.test.ts
 ```
 
@@ -932,7 +932,7 @@ Edit `packages/hub/src/registry/session-registry.ts`:
 
 - [ ] **Step 4: Verify tests pass**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/registry/session-registry.test.ts
 ```
 
@@ -994,7 +994,7 @@ describe('shouldGatePreToolUse — usesPermissionRequest short-circuit', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/agents/claude/approval-policy.test.ts
 ```
 
@@ -1027,7 +1027,7 @@ export function shouldGatePreToolUse(
 
 - [ ] **Step 4: Verify tests pass**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/agents/claude/approval-policy.test.ts
 ```
 
@@ -1102,7 +1102,7 @@ describe('buildCodexPermissionResponseBody', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/agents/codex/permission-response.test.ts
 ```
 
@@ -1150,7 +1150,7 @@ export function buildCodexPermissionResponseBody(d: PermissionRequestDecision): 
 
 - [ ] **Step 4: Verify tests pass**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/agents/codex/permission-response.test.ts
 ```
 
@@ -1292,7 +1292,7 @@ describe('POST /permission/:sessionId — happy paths', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/rest/permission.test.ts
 ```
 
@@ -1434,7 +1434,7 @@ Edit `packages/hub/src/rest/server.ts`:
 
 - [ ] **Step 5: Verify tests pass**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/rest/permission.test.ts
 ```
 
@@ -1551,7 +1551,7 @@ describe('POST /permission/:sessionId — failure modes', () => {
 
 - [ ] **Step 2: Run tests**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/rest/permission.test.ts
 ```
 
@@ -1596,7 +1596,7 @@ describe('/hooks — schema split', () => {
 
 - [ ] **Step 2: Run test**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/rest/hooks.test.ts
 ```
 
@@ -1615,7 +1615,7 @@ if (parsed.data.event === 'PermissionRequest') {
 
 - [ ] **Step 4: Verify tests pass**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/rest/hooks.test.ts
 ```
 
@@ -1732,7 +1732,7 @@ import { ApprovalManager } from '../approval-manager.js';
 
 - [ ] **Step 2: Run tests**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/rest/hooks.test.ts
 ```
 
@@ -1777,7 +1777,7 @@ if (parsed.data.event === 'PostToolUse'
 
 - [ ] **Step 4: Verify tests pass**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/rest/hooks.test.ts
 ```
 
@@ -1896,7 +1896,7 @@ if (!shouldGatePreToolUse(env.raw, knownMode, approvalGate, allowCtx, hasSubscri
 
 - [ ] **Step 4: Build the hub package**
 
-```
+```bash
 pnpm --filter @sesshin/hub build
 ```
 
@@ -1904,7 +1904,7 @@ Expected: builds without TS errors.
 
 - [ ] **Step 5: Run all hub tests to confirm no regressions**
 
-```
+```bash
 pnpm --filter @sesshin/hub test
 ```
 
@@ -1983,7 +1983,7 @@ describe('exitPlanModeHandler — PermissionRequest output shape', () => {
 
 - [ ] **Step 3: Run tests**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/agents/claude/tool-handlers/exit-plan-mode.test.ts
 ```
 
@@ -2049,7 +2049,7 @@ describe('askUserQuestionHandler — PermissionRequest shape', () => {
 
 - [ ] **Step 2: Run tests**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/agents/claude/tool-handlers/ask-user-question.test.ts
 ```
 
@@ -2109,7 +2109,7 @@ describe('generateHooksOnlySettings — PermissionRequest HTTP hook', () => {
 
 - [ ] **Step 2: Run tests**
 
-```
+```bash
 pnpm --filter @sesshin/cli exec vitest run src/settings-tempfile.test.ts
 ```
 
@@ -2145,7 +2145,7 @@ export function generateHooksOnlySettings(o: HooksSettingsInput): string {
 
 - [ ] **Step 4: Verify tests pass**
 
-```
+```bash
 pnpm --filter @sesshin/cli exec vitest run src/settings-tempfile.test.ts
 ```
 
@@ -2192,7 +2192,7 @@ describe('GET /api/diagnostics — usesPermissionRequest', () => {
 
 - [ ] **Step 2: Run tests**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/rest/diagnostics.test.ts
 ```
 
@@ -2228,7 +2228,7 @@ Edit `packages/hub/src/rest/diagnostics.ts`:
 
 - [ ] **Step 4: Verify tests pass**
 
-```
+```bash
 pnpm --filter @sesshin/hub exec vitest run src/rest/diagnostics.test.ts
 ```
 
@@ -2296,7 +2296,7 @@ export async function runStatus(opts: { sessionId?: string; json?: boolean }): P
 
 - [ ] **Step 3: Build**
 
-```
+```bash
 pnpm --filter @sesshin/cli build
 ```
 
@@ -2330,7 +2330,7 @@ Run this command to fetch sesshin's view of the current session:
 
 ```bash
 sesshin status --session $SESSHIN_SESSION_ID --json
-```
+```markdown
 
 Then summarise the result for the user, including:
 - current permission mode (`permissionMode`)
@@ -2513,7 +2513,7 @@ describe('e2e: PermissionRequest', () => {
 
 - [ ] **Step 3: Run e2e**
 
-```
+```bash
 pnpm --filter @sesshin/hub build && pnpm --filter @sesshin/shared build
 pnpm exec vitest run tests/e2e/permission-request.test.ts
 ```
@@ -2535,7 +2535,7 @@ git commit -m "test(e2e): full PermissionRequest flow — happy path, opt-in, cl
 
 - [ ] **Step 1: Build everything**
 
-```
+```bash
 pnpm build
 ```
 
@@ -2543,7 +2543,7 @@ Expected: success.
 
 - [ ] **Step 2: Run all tests**
 
-```
+```bash
 pnpm test
 ```
 

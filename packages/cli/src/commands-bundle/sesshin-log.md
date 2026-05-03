@@ -14,12 +14,16 @@ stream only matching JSONL records. Common types:
 - `attachment` — file attachments
 - `user` / `assistant` — message records
 
+For live monitoring use `--tail` (delegates to `tail -F`, follows logrotate
+and atomic rename cleanly).
+
 Examples:
 
 ```bash
 sesshin log --session $SESSHIN_SESSION_ID                        # just the path
 sesshin log --session $SESSHIN_SESSION_ID --filter permission-mode
 sesshin log --session $SESSHIN_SESSION_ID --json                 # {sessionId,path}
+sesshin log --session $SESSHIN_SESSION_ID --tail                 # live stream
 ```
 
 Then summarise the result for the user.

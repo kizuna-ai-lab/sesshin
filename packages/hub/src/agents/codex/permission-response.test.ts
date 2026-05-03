@@ -22,6 +22,10 @@ describe('sanitizeCodexPermissionDecision', () => {
     expect(sanitizeCodexPermissionDecision({ behavior: 'deny' }))
       .toEqual({ behavior: 'deny' });
   });
+  it('deny preserves explicitly empty message (not dropped as falsy)', () => {
+    expect(sanitizeCodexPermissionDecision({ behavior: 'deny', message: '' }))
+      .toEqual({ behavior: 'deny', message: '' });
+  });
 });
 
 describe('buildCodexPermissionResponseBody', () => {

@@ -9,6 +9,7 @@ export function ActionButtons({ ws, sessionId }: { ws: WsClient; sessionId: stri
   return (
     <div style={{ marginBottom: 12 }} data-testid="action-buttons">
       <button
+        type="button"
         onClick={() => ws.sendAction(sessionId, 'stop')}
         title="Send ESC — interrupt running tool"
         style={{

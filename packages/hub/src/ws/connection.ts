@@ -231,19 +231,19 @@ function handleUpstream(
       return;
     }
     const source = `remote-adapter:${state.kind ?? 'unknown'}` as const;
-    // The 'stop' action (ESC interrupt) bypasses the running-state gate.
-    // canAcceptInput refuses remote input during running to keep the PTY
-    // clean of user typing intermixed with claude's output, but the whole
-    // point of stop/ESC is to interrupt precisely when claude is busy —
-    // gating it on `running` would make the kill-switch useless. Other
-    // input (typed text, y/n) still goes through the standard gate.
+    // The 'stop' action (ESC interrupt) bypasses canAcceptInput ONLY when
+    // the session is actually running — that's the case the gate was wrong
+    // for (refused with reason 'running' precisely when interrupt matters).
+    // For 'done' / 'interrupted' / unknown states, fall through to the
+    // normal gate so we don't deliver ESC to a session that's already
+    // gone (which would just be discarded but is misleading).
     const isInterrupt = msg.type === 'input.action' && msg.action === 'stop';
-    if (!isInterrupt) {
-      const decision = canAcceptInput(session.state, source);
-      if (!decision.ok) {
-        state.ws.send(JSON.stringify({ type: 'server.error', code: 'input-rejected', message: decision.reason }));
-        return;
-      }
+    const decision = isInterrupt && session.state === 'running'
+      ? { ok: true as const }
+      : canAcceptInput(session.state, source);
+    if (!decision.ok) {
+      state.ws.send(JSON.stringify({ type: 'server.error', code: 'input-rejected', message: decision.reason }));
+      return;
     }
     let data: string | null = null;
     if (msg.type === 'input.text') data = msg.text;

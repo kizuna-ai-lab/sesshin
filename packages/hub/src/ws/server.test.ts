@@ -371,4 +371,46 @@ describe('input.action stop bypasses canAcceptInput running-state gate', () => {
       await localSvr.close();
     }
   });
+
+  it('stop on done/interrupted sessions still rejected with session-offline (bypass is running-only)', async () => {
+    // Regression check for the second-pass review: the stop bypass must NOT
+    // overshoot into states where canAcceptInput would have returned
+    // session-offline. Those sessions are gone — delivering ESC is wrong.
+    const registry = new SessionRegistry();
+    registry.register({ id: 's3', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    registry.updateState('s3', 'done');
+
+    const seenInput: string[] = [];
+    const errs: Array<{ code?: string; message?: string }> = [];
+    const localSvr = createWsServer({
+      registry, bus: new EventBus(), tap: new PtyTap({ ringBytes: 1024 }), staticDir: null,
+      onInput: async (_sid, data) => { seenInput.push(data); return { ok: true }; },
+    });
+    await localSvr.listen(0, '127.0.0.1');
+    const localPort = localSvr.address().port;
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${localPort}/v1/ws`);
+      await new Promise<void>((res, rej) => { ws.on('open', () => res()); ws.on('error', rej); });
+      ws.send(JSON.stringify({
+        type: 'client.identify', protocol: 1,
+        client: { kind: 'debug-web', version: '0.0.0', capabilities: ['actions','state'] },
+      }));
+      await new Promise<void>((res) => ws.once('message', () => res()));
+      ws.on('message', (buf) => {
+        const m = JSON.parse(String(buf));
+        if (m.type === 'server.error') errs.push(m);
+      });
+
+      ws.send(JSON.stringify({ type: 'input.action', sessionId: 's3', action: 'stop' }));
+      await new Promise<void>((res) => setTimeout(res, 50));
+      // No ESC should be delivered.
+      expect(seenInput).not.toContain('\x1b');
+      // Error returned with session-offline reason.
+      expect(errs.find((e) => e.code === 'input-rejected' && e.message === 'session-offline')).toBeTruthy();
+
+      ws.close();
+    } finally {
+      await localSvr.close();
+    }
+  });
 });

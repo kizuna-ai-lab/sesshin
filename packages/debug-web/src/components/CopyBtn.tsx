@@ -47,6 +47,7 @@ export function CopyBtn({ text, label, feedbackMs = 1200 }: Props) {
 
   return (
     <button
+      type="button"
       data-testid="copy-btn"
       onClick={copy}
       title={`Copy: ${text}`}
