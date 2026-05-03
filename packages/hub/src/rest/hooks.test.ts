@@ -33,4 +33,15 @@ describe('/hooks', () => {
     });
     expect(r.status).toBe(404);
   });
+  it('rejects envelope with event=PermissionRequest with 400', async () => {
+    const body = {
+      agent: 'claude-code', sessionId: 's1', ts: Date.now(),
+      event: 'PermissionRequest', raw: {},
+    };
+    const r = await fetch(`http://127.0.0.1:${port}/hooks`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    expect(r.status).toBe(400);
+  });
 });

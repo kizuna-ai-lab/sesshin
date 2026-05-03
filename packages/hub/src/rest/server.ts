@@ -276,6 +276,10 @@ async function ingestHook(req: IncomingMessage, res: ServerResponse, deps: RestS
   try { body = await readJson(req); } catch { return void res.writeHead(400).end('bad json'); }
   const parsed = HookBody.safeParse(body);
   if (!parsed.success) return void res.writeHead(400).end();
+  if (parsed.data.event === 'PermissionRequest') {
+    return void res.writeHead(400, { 'content-type': 'application/json' })
+      .end(JSON.stringify({ error: 'PermissionRequest must be POSTed to /permission/:sessionId, not /hooks' }));
+  }
   if (!deps.registry.get(parsed.data.sessionId)) return void res.writeHead(404).end();
   // Always emit the event onto the bus (state machine, summary trigger, …).
   deps.onHookEvent?.(parsed.data);
