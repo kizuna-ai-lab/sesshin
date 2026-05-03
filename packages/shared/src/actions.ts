@@ -1,19 +1,18 @@
 import { z } from 'zod';
 
 /**
- * Web-driven TTY shortcuts. Each maps to a small string injected into the
- * Claude PTY (see `agents/claude/action-map.ts`):
- *   - `approve` / `reject` → `y\r` / `n\r` (fallback when sesshin's
- *     PermissionRequest path is not engaged and Claude shows its native
- *     TUI permission prompt)
- *   - `continue` → `\r` (general Enter, e.g. dismiss "press any key")
- *   - `stop`     → `\x1b` (ESC — interrupt the running tool / agent)
+ * Web-driven TTY shortcut. Maps to a raw string injected into Claude's PTY
+ * (see `agents/claude/action-map.ts`).
  *
- * Structured permission / question flows go through `prompt-response`
- * (PromptResponse schema), not these. The earlier set included
- * `retry`/`fix`/`summarize`/`details`/`ignore`/`snooze`; removed because
- * the slash commands they injected don't exist in Claude Code (and the
- * `ignore`/`snooze` mappings were no-op empty strings).
+ *   - `stop` → `\x1b` (ESC — interrupt the running tool / agent)
+ *
+ * `stop` is the only remaining action because ESC isn't typeable through
+ * `input.text` (TextInput trims and sends `<text>\r`). `approve`/`reject`/
+ * `continue` were removed: y/n/Enter are equivalent to typing the literal
+ * character into TextInput, and structured permission / question answers
+ * go through `prompt-response` (PromptResponse schema). Earlier dead
+ * names (`retry`/`fix`/`summarize`/`details`/`ignore`/`snooze`) were
+ * removed in the prior cleanup.
  */
-export const ActionEnum = z.enum(['approve', 'reject', 'continue', 'stop']);
+export const ActionEnum = z.enum(['stop']);
 export type Action = z.infer<typeof ActionEnum>;
