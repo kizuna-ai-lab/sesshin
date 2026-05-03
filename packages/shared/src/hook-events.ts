@@ -3,7 +3,8 @@ import { z } from 'zod';
 /** Sesshin's normalized event vocabulary, agent-agnostic. */
 export const NormalizedHookEventEnum = z.enum([
   'SessionStart', 'UserPromptSubmit',
-  'PreToolUse', 'PostToolUse',
+  'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
+  'PermissionRequest',
   'Stop', 'StopFailure', 'SessionEnd',
   'agent-internal',
 ]);
@@ -15,6 +16,8 @@ export const ClaudeHookMap: Record<string, NormalizedHookEvent> = {
   UserPromptSubmit: 'UserPromptSubmit',
   PreToolUse: 'PreToolUse',
   PostToolUse: 'PostToolUse',
+  PostToolUseFailure: 'PostToolUseFailure',
+  PermissionRequest: 'PermissionRequest',
   Stop: 'Stop',
   StopFailure: 'StopFailure',
   SessionEnd: 'SessionEnd',
