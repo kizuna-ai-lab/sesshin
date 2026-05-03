@@ -77,3 +77,23 @@ describe('ApprovalManager', () => {
     await expect(decision).resolves.toEqual({ decision: 'deny', reason: 'no client' });
   });
 });
+
+describe('ApprovalManager — toolInputFingerprint', () => {
+  it('open() populates toolInputFingerprint on the public PendingApproval', () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    const { request } = m.open({ sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' } });
+    expect(request.toolInputFingerprint).toMatch(/^[0-9a-f]{40}$/);
+  });
+  it('two open() calls with identical toolInput produce identical fingerprints', () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    const a = m.open({ sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' } }).request;
+    const b = m.open({ sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' } }).request;
+    expect(a.toolInputFingerprint).toBe(b.toolInputFingerprint);
+  });
+  it('different toolInput → different fingerprint', () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    const a = m.open({ sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' } }).request;
+    const b = m.open({ sessionId: 's', tool: 'Bash', toolInput: { command: 'pwd' } }).request;
+    expect(a.toolInputFingerprint).not.toBe(b.toolInputFingerprint);
+  });
+});

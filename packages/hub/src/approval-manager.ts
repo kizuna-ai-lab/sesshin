@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { fingerprintToolInput } from '@sesshin/shared';
 
 export type Decision = 'allow' | 'deny' | 'ask';
 export interface ApprovalOutcome { decision: Decision; reason?: string }
@@ -8,6 +9,7 @@ export interface PendingApproval {
   sessionId: string;
   tool: string;
   toolInput: unknown;
+  toolInputFingerprint: string;
   toolUseId?: string;
   createdAt: number;
   expiresAt: number;
@@ -51,9 +53,11 @@ export class ApprovalManager {
       decision: this.opts.timeoutDecision ?? 'ask',
       reason: this.opts.timeoutReason ?? 'sesshin: approval timed out — falling back to claude TUI prompt',
     };
+    const toolInputFingerprint = fingerprintToolInput(input.toolInput);
     const request: PendingApproval = {
       requestId, sessionId: input.sessionId,
       tool: input.tool, toolInput: input.toolInput,
+      toolInputFingerprint,
       ...(input.toolUseId !== undefined ? { toolUseId: input.toolUseId } : {}),
       createdAt, expiresAt,
     };
@@ -116,7 +120,7 @@ export class ApprovalManager {
     const out: PendingApproval[] = [];
     for (const e of this.pending.values()) {
       if (e.sessionId !== sessionId) continue;
-      out.push({ requestId: e.requestId, sessionId: e.sessionId, tool: e.tool, toolInput: e.toolInput, ...(e.toolUseId !== undefined ? { toolUseId: e.toolUseId } : {}), createdAt: e.createdAt, expiresAt: e.expiresAt });
+      out.push({ requestId: e.requestId, sessionId: e.sessionId, tool: e.tool, toolInput: e.toolInput, toolInputFingerprint: e.toolInputFingerprint, ...(e.toolUseId !== undefined ? { toolUseId: e.toolUseId } : {}), createdAt: e.createdAt, expiresAt: e.expiresAt });
     }
     return out;
   }
