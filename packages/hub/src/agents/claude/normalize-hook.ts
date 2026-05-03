@@ -33,6 +33,12 @@ function mapEvent(event: string, raw: Record<string, unknown>): { kind: EventKin
       return { kind: 'tool-call', payload: { tool: pick(raw, 'tool_name'), input: raw['tool_input'] } };
     case 'PostToolUse':
       return { kind: 'tool-result', payload: { tool: pick(raw, 'tool_name'), result: raw['tool_response'] } };
+    case 'PostToolUseFailure':
+      return { kind: 'tool-result', payload: {
+        tool:   pick(raw, 'tool_name'),
+        result: raw['tool_response'],
+        failed: true,
+      } };
     case 'Stop':
       return { kind: 'agent-output', payload: { stopReason: pick(raw, 'stop_reason') } };
     case 'StopFailure':

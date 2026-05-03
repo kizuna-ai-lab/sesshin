@@ -26,6 +26,16 @@ describe('hookEnvelopeToEvent', () => {
       raw: { nativeEvent: 'PostToolUse', tool_name: 'Bash', tool_response: 'ok' },
     });
     expect(e.kind).toBe('tool-result');
+    expect(e.payload['failed']).toBeUndefined();
+  });
+  it('PostToolUseFailure → tool-result with failed:true (was falling through to agent-internal)', () => {
+    const e = hookEnvelopeToEvent({
+      agent: 'claude-code', sessionId: 's1', ts: 1, event: 'PostToolUseFailure',
+      raw: { nativeEvent: 'PostToolUseFailure', tool_name: 'Bash', tool_response: 'oops' },
+    });
+    expect(e.kind).toBe('tool-result');
+    expect(e.payload).toMatchObject({ tool: 'Bash', result: 'oops', failed: true });
+    expect(e.nativeEvent).toBe('PostToolUseFailure');
   });
   it('Stop → agent-output', () => {
     const e = hookEnvelopeToEvent({
