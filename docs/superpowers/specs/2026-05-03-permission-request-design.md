@@ -319,6 +319,25 @@ Cleanup fires regardless of which path opened the pending request (PreToolUse or
 
 `/permission/:sessionId` route calls `markUsesPermissionRequest(sid)` *before* dispatch. Sticky: never cleared during the session.
 
+**Diagnostics propagation.** `packages/hub/src/rest/diagnostics.ts` exposes the flag on each session in the `/api/diagnostics` snapshot:
+
+```ts
+export function diagnosticsSnapshot(deps: DiagnosticsDeps): {
+  sessions: Array<{
+    id: string; name: string; state: string;
+    permissionMode: string;
+    sessionAllowList: string[]; claudeAllowRules: string[];
+    pendingApprovals: number;
+    hasSubscribedActionsClient: boolean;
+    usesPermissionRequest: boolean;     // NEW
+  }>;
+}
+```
+
+Consumer chain:
+- CLI `sesshin status` (`packages/cli/src/subcommands/status.ts`) extends its `DiagSession` interface with the new field. Non-JSON output adds `pr=yes|no` to the per-session line; JSON output is automatic. The `/sesshin-status` slash command markdown (`packages/cli/src/commands-bundle/sesshin-status.md`) instructs the LLM to mention the flag in its summary.
+- debug-web is **not** a consumer of `/api/diagnostics` (it's WS-driven; verified by grep). No web-side change.
+
 `approval-policy.shouldGatePreToolUse` (existing) gains an extra short-circuit at the top:
 
 ```ts
@@ -390,7 +409,7 @@ No matcher key on the HTTP entry (PermissionRequest has no matcher concept). `ti
 - `packages/hub/src/rest/permission.test.ts` — route-level tests
 - `tests/e2e/permission-request.test.ts` — end-to-end via spawned hub + simulated Claude HTTP POST
 
-**Edited files (~14):**
+**Edited files (~18):**
 - `packages/shared/src/hook-events.ts` — add `PermissionRequest` (and `PostToolUseFailure`) to enum + map
 - `packages/shared/src/index.ts` — export new modules
 - `packages/hub/src/approval-manager.ts` — new fields, indexes, three resolve methods
@@ -405,6 +424,10 @@ No matcher key on the HTTP entry (PermissionRequest has no matcher concept). `ti
 - `packages/hub/src/agents/claude/tool-handlers/ask-user-question.test.ts` — assert `updatedInput` propagates correctly into the `behavior: 'allow'` branch
 - `packages/cli/src/settings-tempfile.ts` — emit `hooks.PermissionRequest` HTTP entry
 - `packages/cli/src/settings-tempfile.test.ts` — assert HTTP-hook JSON shape with URL `/permission/<hex>` and `timeout: 600`
+- `packages/hub/src/rest/diagnostics.ts` — add `usesPermissionRequest` to per-session snapshot
+- `packages/hub/src/rest/diagnostics.test.ts` — assert default `false`; flips to `true` after `markUsesPermissionRequest`
+- `packages/cli/src/subcommands/status.ts` — extend `DiagSession` type; print `pr=yes|no` in non-JSON output
+- `packages/cli/src/commands-bundle/sesshin-status.md` — instruct LLM to surface the flag in its summary
 
 ### 10.2 Test plan
 
@@ -422,6 +445,8 @@ No matcher key on the HTTP entry (PermissionRequest has no matcher concept). `ti
 **Unit — `approval-policy`:** new arg `usesPermissionRequest=true` → returns `false` regardless of mode/policy/allow-list/etc.
 
 **Unit — `settings-tempfile`:** emits `PermissionRequest` HTTP entry alongside command entries; URL `/permission/<sessionId>`; timeout 600.
+
+**Unit — `diagnostics`:** session snapshot has `usesPermissionRequest: false` for a freshly-registered session; flips to `true` after `registry.markUsesPermissionRequest(sid)`. Field is always present on the wire (never undefined).
 
 **Route — `permission.ts`:**
 - 200 + valid PermissionRequest decision JSON for allow path (handler returns `kind:'allow'`)
@@ -464,5 +489,4 @@ No matcher key on the HTTP entry (PermissionRequest has no matcher concept). `ti
 ## 12. Open questions (none blocking)
 
 - Should the cleanup outcome reason be different per cleanup path (toolUseId vs fingerprint vs singleton)? Currently uniform; could split for forensics.
-- Should `usesPermissionRequest` propagate to `/api/diagnostics` output? Trivial to add when needed.
 - Does Claude Code actually fire PermissionRequest for `ExitPlanMode` and `AskUserQuestion` in current versions? Spec assumes yes (test coverage will catch a regression if not). Empirical validation should be added to `docs/validation-log.md` once the implementation is wired and a real `claude` is exercised against it.
