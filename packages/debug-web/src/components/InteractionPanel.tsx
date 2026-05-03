@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { promptRequestsBySession, type PendingPromptRequest } from '../store.js';
 import type { WsClient } from '../ws-client.js';
 
@@ -11,6 +11,14 @@ function fmtRemaining(expiresAt: number): string {
 function Card({ ws, c }: { ws: WsClient; c: PendingPromptRequest }) {
   const [selected, setSelected] = useState<Record<number, Set<string>>>({});
   const [freeText, setFreeText] = useState<Record<number, string>>({});
+  // 1Hz tick to keep `fallback in Ns` live. Bumping this state triggers a
+  // re-render that recomputes fmtRemaining(); without it the displayed seconds
+  // are frozen at the value sampled when the card first mounted.
+  const [, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const submit = () => {
     const answers = c.questions.map((q, idx) => ({

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render } from 'preact';
 import { InteractionPanel } from './InteractionPanel.js';
 import { promptRequestsBySession, addPromptRequest } from '../store.js';
@@ -90,6 +90,36 @@ describe('InteractionPanel', () => {
       sid: 's1', rid: 'r-ft',
       answers: [{ questionIndex: 0, selectedKeys: ['yes'], freeText: 'note text' }],
     });
+  });
+
+  it('countdown ticks down once per second without external re-render', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-05-04T08:00:00Z'));
+      addPromptRequest({
+        sessionId: 's1', requestId: 'r-tick', origin: 'permission', toolName: 'Bash',
+        questions: [{
+          prompt: 'Run?', multiSelect: false, allowFreeText: false,
+          options: [{ key: 'yes', label: 'Yes' }],
+        }],
+        expiresAt: Date.now() + 60_000,
+      });
+      const div = document.createElement('div');
+      render(<InteractionPanel ws={stub} sessionId="s1" />, div);
+      // Drain microtasks so the Card's useEffect installs the interval before
+      // we start advancing timers — without this the setInterval is scheduled
+      // *after* advanceTimersByTime, so the tick never fires.
+      await Promise.resolve();
+      expect(div.textContent).toContain('fallback in 60s');
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(div.textContent).toContain('fallback in 55s');
+      await vi.advanceTimersByTimeAsync(54_000);
+      expect(div.textContent).toContain('fallback in 1s');
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(div.textContent).toContain('expiring');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('Submit is disabled when a multi-select question has no selection and no free-text allowed', () => {
