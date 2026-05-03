@@ -5,3 +5,4 @@ export * from './events.js';
 export * from './hook-events.js';
 export * from './protocol.js';
 export * from './tool-fingerprint.js';
+export * from './permission.js';
