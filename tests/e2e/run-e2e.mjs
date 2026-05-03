@@ -2,7 +2,7 @@
 import { spawn, execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import WS from 'ws';
 
@@ -13,14 +13,39 @@ const HUB_BIN  = join(ROOT, 'packages/hub/bin/sesshin-hub');
 const CLI_BIN  = join(ROOT, 'packages/cli/bin/sesshin');
 const HOOK_BIN = join(ROOT, 'packages/hook-handler/bin/sesshin-hook-handler');
 
+// Only kill hubs that were spawned BY e2e runs (current or previous). Earlier
+// versions killed any process whose cmdline contained "sesshin-hub" — that
+// over-killed users' real running hubs in the same shell, taking down their
+// REST/WS listen sockets. e2e hubs have HOME pointing into our per-run
+// tmpdir (set below); real user hubs have HOME under the user's home dir.
+// Scope the kill via /proc/<pid>/environ.
+//
+// Linux-only: macOS/Windows have no /proc, so this becomes a silent no-op
+// there. With this PR's shutdown fix landing, leaked hubs are rare enough
+// that the no-op is acceptable; investing in a cross-platform process-env
+// discovery (lsof/ps -E + parsing) is YAGNI for a Linux-only test env.
 function killLeftoverHubs() {
+  if (process.platform !== 'linux') return;
+  // Build the prefix at runtime so $TMPDIR is honored (default /tmp on
+  // Linux but configurable). Trailing slash + 'sesshin-e2e-' matches our
+  // mkdtempSync template below.
+  const e2eHomePrefix = `HOME=${tmpdir()}/sesshin-e2e-`;
   try {
     const out = execSync('ps -eo pid,args').toString();
     for (const line of out.split('\n')) {
-      if (line.includes('sesshin-hub') && !line.includes('grep')) {
-        const m = line.trim().match(/^(\d+)/);
-        if (m) { try { process.kill(Number(m[1])); } catch {} }
-      }
+      if (!line.includes('sesshin-hub') || line.includes('grep')) continue;
+      const m = line.trim().match(/^(\d+)/);
+      if (!m) continue;
+      const pid = Number(m[1]);
+      // Read environ to confirm this hub belongs to a (previous) e2e run.
+      // /proc/<pid>/environ may be unreadable (perms, race) — skip rather
+      // than risk a misfire.
+      let environ = '';
+      try { environ = readFileSync(`/proc/${pid}/environ`, 'utf-8'); } catch { continue; }
+      const home = environ.split('\0').find((kv) => kv.startsWith('HOME='));
+      if (!home) continue;
+      if (!home.startsWith(e2eHomePrefix)) continue;
+      try { process.kill(pid); } catch {}
     }
   } catch {}
 }
