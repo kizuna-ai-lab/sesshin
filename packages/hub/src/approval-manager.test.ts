@@ -112,6 +112,45 @@ describe('ApprovalManager — resolveByToolUseId', () => {
   });
 });
 
+describe('ApprovalManager — resolveByFingerprint', () => {
+  it('resolves single match without toolUseId, returns 1', async () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    const { request, decision } = m.open({
+      sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' },
+    });
+    const fp = request.toolInputFingerprint;
+    expect(m.resolveByFingerprint('s', 'Bash', fp, { decision: 'deny', reason: 'x' })).toBe(1);
+    await expect(decision).resolves.toEqual({ decision: 'deny', reason: 'x' });
+  });
+  it('returns 0 when set has 2+ entries with same fingerprint (ambiguous)', () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    const a = m.open({ sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' } }).request;
+    m.open({ sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' } });
+    expect(m.resolveByFingerprint('s', 'Bash', a.toolInputFingerprint, { decision: 'ask' })).toBe(0);
+  });
+  it('returns 0 when matching entry has toolUseId (canonical match should have caught it)', () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    const { request } = m.open({
+      sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' }, toolUseId: 'tu_1',
+    });
+    expect(m.resolveByFingerprint('s', 'Bash', request.toolInputFingerprint, { decision: 'ask' })).toBe(0);
+  });
+  it('returns 0 when no fingerprint match', () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    expect(m.resolveByFingerprint('s', 'Bash', 'a'.repeat(40), { decision: 'ask' })).toBe(0);
+  });
+  it('returns 0 when toolName differs', () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    const { request } = m.open({ sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' } });
+    expect(m.resolveByFingerprint('s', 'Edit', request.toolInputFingerprint, { decision: 'ask' })).toBe(0);
+  });
+  it('returns 0 when sessionId differs', () => {
+    const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
+    const { request } = m.open({ sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' } });
+    expect(m.resolveByFingerprint('s2', 'Bash', request.toolInputFingerprint, { decision: 'ask' })).toBe(0);
+  });
+});
+
 describe('ApprovalManager — toolInputFingerprint', () => {
   it('open() populates toolInputFingerprint on the public PendingApproval', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });

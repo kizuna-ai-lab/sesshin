@@ -30,8 +30,25 @@ export interface ApprovalManagerOpts {
 
 export class ApprovalManager {
   private pending = new Map<string, Entry>();
-  private byToolUseId = new Map<string, string>();   // `${sessionId}|${toolUseId}` → requestId
+  private byToolUseId = new Map<string, string>();           // `${sessionId}|${toolUseId}` → requestId
+  private byFingerprint = new Map<string, Set<string>>();    // `${sid}|${tool}|${fp}` → Set<requestId>
   constructor(private opts: ApprovalManagerOpts) {}
+
+  private fpKey(sessionId: string, tool: string, fp: string): string {
+    return `${sessionId}|${tool}|${fp}`;
+  }
+
+  private cleanupIndexes(entry: Entry): void {
+    if (entry.toolUseId !== undefined) {
+      this.byToolUseId.delete(`${entry.sessionId}|${entry.toolUseId}`);
+    }
+    const fpk = this.fpKey(entry.sessionId, entry.tool, entry.toolInputFingerprint);
+    const set = this.byFingerprint.get(fpk);
+    if (set) {
+      set.delete(entry.requestId);
+      if (set.size === 0) this.byFingerprint.delete(fpk);
+    }
+  }
 
   /**
    * Open a permission request. Returns the public PendingApproval (so the
@@ -64,20 +81,23 @@ export class ApprovalManager {
     };
     const decision = new Promise<ApprovalOutcome>((resolve) => {
       const onExpire = input.onExpire ?? (() => undefined);
+      const entry: Entry = { ...request, resolve, timer: undefined as unknown as ReturnType<typeof setTimeout>, onExpire };
       const timer = setTimeout(() => {
         const existed = this.pending.delete(requestId);
         if (!existed) return;
-        if (request.toolUseId !== undefined) {
-          this.byToolUseId.delete(`${request.sessionId}|${request.toolUseId}`);
-        }
+        this.cleanupIndexes(entry);
         try { onExpire(request); } catch { /* notification best-effort */ }
         resolve(fallback);
       }, timeoutMs);
-      const entry: Entry = { ...request, resolve, timer, onExpire };
+      entry.timer = timer;
       this.pending.set(requestId, entry);
       if (input.toolUseId !== undefined) {
         this.byToolUseId.set(`${input.sessionId}|${input.toolUseId}`, requestId);
       }
+      const fpk = this.fpKey(input.sessionId, input.tool, toolInputFingerprint);
+      const set = this.byFingerprint.get(fpk) ?? new Set<string>();
+      set.add(requestId);
+      this.byFingerprint.set(fpk, set);
     });
     return { request, decision };
   }
@@ -88,9 +108,7 @@ export class ApprovalManager {
     if (!entry) return false;
     clearTimeout(entry.timer);
     this.pending.delete(requestId);
-    if (entry.toolUseId !== undefined) {
-      this.byToolUseId.delete(`${entry.sessionId}|${entry.toolUseId}`);
-    }
+    this.cleanupIndexes(entry);
     entry.resolve(outcome);
     return true;
   }
@@ -110,6 +128,26 @@ export class ApprovalManager {
   }
 
   /**
+   * Resolve a pending approval matched by `(sessionId, toolName, fingerprint)`.
+   * Only resolves when:
+   *   - the fingerprint set has exactly one entry, AND
+   *   - that entry has no `toolUseId` set (canonical match should have caught it)
+   *
+   * Returns 1 if resolved, else 0.
+   */
+  resolveByFingerprint(
+    sessionId: string, toolName: string, fingerprint: string, outcome: ApprovalOutcome,
+  ): 0 | 1 {
+    const set = this.byFingerprint.get(this.fpKey(sessionId, toolName, fingerprint));
+    if (!set || set.size !== 1) return 0;
+    const requestId = set.values().next().value as string;
+    const entry = this.pending.get(requestId);
+    if (!entry) return 0;
+    if (entry.toolUseId !== undefined) return 0;
+    return this.decide(requestId, outcome) ? 1 : 0;
+  }
+
+  /**
    * Cancel any pending requests for a session (e.g., session unregistered).
    * Resolves them with `decision: 'ask'` so the originating hook unblocks.
    *
@@ -123,9 +161,7 @@ export class ApprovalManager {
       if (e.sessionId !== sessionId) continue;
       clearTimeout(e.timer);
       this.pending.delete(rid);
-      if (e.toolUseId !== undefined) {
-        this.byToolUseId.delete(`${e.sessionId}|${e.toolUseId}`);
-      }
+      this.cleanupIndexes(e);
       e.resolve({ decision: 'ask', reason });
       cancelled += 1;
     }
