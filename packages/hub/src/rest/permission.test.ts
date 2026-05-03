@@ -318,6 +318,57 @@ describe('integration: PermissionRequest opt-in suppresses subsequent PreToolUse
     const j = await r.json();
     expect(j.hookSpecificOutput.permissionDecision).toBe('ask');
   });
+  it('PostToolUse cleanup of a stale pending approval invokes onApprovalsCleanedUp with the requestId', async () => {
+    const cleaned: Array<{ sessionId: string; requestIds: string[] }> = [];
+    svr = createRestServer({
+      registry, approvals,
+      onApprovalsCleanedUp: (sessionId, requestIds) => cleaned.push({ sessionId, requestIds }),
+    });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+
+    // Open an approval directly so the PostToolUse cleanup has something to find.
+    const { request } = approvals.open({
+      sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' }, toolUseId: 'tu_stale',
+    });
+
+    const r = await fetch(`http://127.0.0.1:${port}/hooks`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        agent: 'claude-code', sessionId: 's1', ts: Date.now(), event: 'PostToolUse',
+        raw: {
+          nativeEvent: 'PostToolUse', tool_name: 'Bash',
+          tool_input: { command: 'ls' }, tool_use_id: 'tu_stale',
+        },
+      }),
+    });
+    expect(r.status).toBe(204);
+    expect(cleaned).toEqual([{ sessionId: 's1', requestIds: [request.requestId] }]);
+  });
+
+  it('does NOT invoke onApprovalsCleanedUp when no pending approval matches', async () => {
+    const cleaned: Array<{ sessionId: string; requestIds: string[] }> = [];
+    svr = createRestServer({
+      registry, approvals,
+      onApprovalsCleanedUp: (sessionId, requestIds) => cleaned.push({ sessionId, requestIds }),
+    });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+
+    // No prior approvals.open — PostToolUse should be a no-op for cleanup.
+    await fetch(`http://127.0.0.1:${port}/hooks`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        agent: 'claude-code', sessionId: 's1', ts: Date.now(), event: 'PostToolUse',
+        raw: {
+          nativeEvent: 'PostToolUse', tool_name: 'Bash',
+          tool_input: { command: 'ls' }, tool_use_id: 'tu_nope',
+        },
+      }),
+    });
+    expect(cleaned).toEqual([]);
+  });
+
   it('full flow — PermissionRequest pending then PostToolUse with same tool_use_id resolves it', async () => {
     let resolvedDecision: { decision: string; reason?: string } | undefined;
     svr = createRestServer({

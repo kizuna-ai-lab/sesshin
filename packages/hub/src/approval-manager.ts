@@ -123,16 +123,19 @@ export class ApprovalManager {
 
   /**
    * Resolve a pending approval matched by exact `(sessionId, toolUseId)`.
-   * Returns 1 iff a pending request was found and resolved, else 0.
+   * Returns the resolved requestId iff a pending request was found and
+   * resolved, else null. Callers use the returned id to broadcast a
+   * `session.prompt-request.resolved` notification to WS clients (the
+   * approval manager itself stays out of the WS layer).
    *
    * Used by the stale-cleanup path: when PostToolUse / Stop arrives for a
    * tool whose approval is still pending, we don't want to leave the hook's
    * HTTP connection waiting on a decision that will no longer affect runtime.
    */
-  resolveByToolUseId(sessionId: string, toolUseId: string, outcome: ApprovalOutcome): 0 | 1 {
+  resolveByToolUseId(sessionId: string, toolUseId: string, outcome: ApprovalOutcome): string | null {
     const requestId = this.byToolUseId.get(`${sessionId}|${toolUseId}`);
-    if (!requestId) return 0;
-    return this.decide(requestId, outcome) ? 1 : 0;
+    if (!requestId) return null;
+    return this.decide(requestId, outcome) ? requestId : null;
   }
 
   /**
@@ -141,36 +144,36 @@ export class ApprovalManager {
    *   - the fingerprint set has exactly one entry, AND
    *   - that entry has no `toolUseId` set (canonical match should have caught it)
    *
-   * Returns 1 if resolved, else 0.
+   * Returns the resolved requestId on success, else null.
    */
   resolveByFingerprint(
     sessionId: string, toolName: string, fingerprint: string, outcome: ApprovalOutcome,
-  ): 0 | 1 {
+  ): string | null {
     const set = this.byFingerprint.get(this.fpKey(sessionId, toolName, fingerprint));
-    if (!set || set.size !== 1) return 0;
+    if (!set || set.size !== 1) return null;
     const requestId = set.values().next().value as string;
     const entry = this.pending.get(requestId);
-    if (!entry) return 0;
-    if (entry.toolUseId !== undefined) return 0;
-    return this.decide(requestId, outcome) ? 1 : 0;
+    if (!entry) return null;
+    if (entry.toolUseId !== undefined) return null;
+    return this.decide(requestId, outcome) ? requestId : null;
   }
 
   /**
    * Resolve the unique pending approval for a session, if there is exactly one.
-   * Returns 1 if resolved, else 0.
+   * Returns the resolved requestId on success, else null.
    *
    * Used as last-resort cleanup on `Stop` events when no toolUseId / fingerprint
    * match is available — it's safe because Claude only emits one Stop per turn.
    */
-  resolveSingletonForSession(sessionId: string, outcome: ApprovalOutcome): 0 | 1 {
+  resolveSingletonForSession(sessionId: string, outcome: ApprovalOutcome): string | null {
     let candidate: string | null = null;
     for (const [rid, e] of this.pending) {
       if (e.sessionId !== sessionId) continue;
-      if (candidate !== null) return 0;
+      if (candidate !== null) return null;
       candidate = rid;
     }
-    if (candidate === null) return 0;
-    return this.decide(candidate, outcome) ? 1 : 0;
+    if (candidate === null) return null;
+    return this.decide(candidate, outcome) ? candidate : null;
   }
 
   /**

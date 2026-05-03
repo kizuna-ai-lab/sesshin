@@ -184,6 +184,25 @@ export async function startHub(): Promise<HubInstance> {
     hasSubscribedActionsClient: (sid) => wsRef?.hasSubscribedActionsClient(sid) ?? false,
     listClients: (sid) => wsRef?.listClients(sid) ?? [],
     historyForSession: (sid, n) => historyStore.get(sid, n),
+    onApprovalsCleanedUp: (sessionId, requestIds) => {
+      // The stale-cleanup path in rest/server.ts just resolved one or more
+      // pending approvals because PostToolUse / Stop arrived for a tool whose
+      // approval was still open (typical scenario: PreToolUse timed out →
+      // sesshin returned ask → CC fired PermissionRequest → user picked in
+      // CC's TUI before answering on the remote → tool ran while sesshin's
+      // PermissionRequest long-poll was still hanging). Clean up the per-
+      // request maps and tell remote clients the prompt is no longer live so
+      // the awaiting card disappears.
+      for (const rid of requestIds) {
+        pendingHandlers.delete(rid);
+        pendingUpdatedInput.delete(rid);
+        pendingUpdatedPermissions.delete(rid);
+        wsRef?.broadcast({
+          type: 'session.prompt-request.resolved',
+          sessionId, requestId: rid, reason: 'cancelled-tool-completed',
+        });
+      }
+    },
     onPreToolUseApproval: async (env) => {
       // Mode-aware gating: when claude wouldn't have prompted on its own
       // (auto / acceptEdits / bypassPermissions / read-only tool), return

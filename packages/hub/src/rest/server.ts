@@ -57,6 +57,15 @@ export interface RestServerDeps {
   listClients?: (sessionId: string | null) => ClientInfo[];
   /** Read recent prompt-resolution history for a session, newest-first. */
   historyForSession?: (sessionId: string, n: number) => HistoryEntry[];
+  /**
+   * Called from the stale-cleanup path when a tool-completion event
+   * (PostToolUse / PostToolUseFailure / Stop) successfully resolves one or
+   * more pending approvals via `resolveByToolUseId/Fingerprint/Singleton`.
+   * The wire layer uses this to broadcast `session.prompt-request.resolved`
+   * to WS clients — otherwise the remote prompt UI stays in awaiting state
+   * forever even though the underlying approval has already been decided.
+   */
+  onApprovalsCleanedUp?: (sessionId: string, requestIds: string[]) => void;
 }
 
 export interface RestServer {
@@ -317,12 +326,20 @@ async function ingestHook(req: IncomingMessage, res: ServerResponse, deps: RestS
       };
       const sid = parsed.data.sessionId;
 
-      const resolvedExact = tuid ? deps.approvals.resolveByToolUseId(sid, tuid, outcome) : 0;
-      const resolvedFp = (resolvedExact === 0 && toolName && fp)
+      const resolvedExact = tuid ? deps.approvals.resolveByToolUseId(sid, tuid, outcome) : null;
+      const resolvedFp = (resolvedExact === null && toolName && fp)
         ? deps.approvals.resolveByFingerprint(sid, toolName, fp, outcome)
-        : 0;
-      if (resolvedExact === 0 && resolvedFp === 0 && parsed.data.event === 'Stop') {
-        deps.approvals.resolveSingletonForSession(sid, outcome);
+        : null;
+      const resolvedSingleton = (resolvedExact === null && resolvedFp === null && parsed.data.event === 'Stop')
+        ? deps.approvals.resolveSingletonForSession(sid, outcome)
+        : null;
+      // Collect every requestId that just got resolved by stale-cleanup so the
+      // wire layer can broadcast `session.prompt-request.resolved` to clients
+      // (otherwise a remote client would keep showing the awaiting prompt
+      // forever — the approval manager itself stays out of the WS layer).
+      const cleanedUp = [resolvedExact, resolvedFp, resolvedSingleton].filter((x): x is string => x !== null);
+      if (cleanedUp.length > 0) {
+        deps.onApprovalsCleanedUp?.(sid, cleanedUp);
       }
     }
   }

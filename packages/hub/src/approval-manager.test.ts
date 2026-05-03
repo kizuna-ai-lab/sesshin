@@ -79,29 +79,29 @@ describe('ApprovalManager', () => {
 });
 
 describe('ApprovalManager — resolveByToolUseId', () => {
-  it('resolves matching entry, returns 1, fulfills decision Promise with the outcome', async () => {
+  it('resolves matching entry, returns the resolved requestId, fulfills decision Promise', async () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
     const { request, decision } = m.open({
       sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' }, toolUseId: 'tu_1',
     });
     expect(request.toolUseId).toBe('tu_1');
     const n = m.resolveByToolUseId('s', 'tu_1', { decision: 'deny', reason: 'r' });
-    expect(n).toBe(1);
+    expect(n).toBe(request.requestId);
     await expect(decision).resolves.toEqual({ decision: 'deny', reason: 'r' });
   });
-  it('returns 0 when no entry matches', () => {
+  it('returns null when no entry matches', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
-    expect(m.resolveByToolUseId('s', 'tu_missing', { decision: 'ask' })).toBe(0);
+    expect(m.resolveByToolUseId('s', 'tu_missing', { decision: 'ask' })).toBe(null);
   });
-  it('returns 0 when toolUseId differs from the open() entry', () => {
+  it('returns null when toolUseId differs from the open() entry', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
     m.open({ sessionId: 's', tool: 'Bash', toolInput: {}, toolUseId: 'tu_1' });
-    expect(m.resolveByToolUseId('s', 'tu_2', { decision: 'ask' })).toBe(0);
+    expect(m.resolveByToolUseId('s', 'tu_2', { decision: 'ask' })).toBe(null);
   });
-  it('returns 0 when sessionId differs', () => {
+  it('returns null when sessionId differs', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
     m.open({ sessionId: 's1', tool: 'Bash', toolInput: {}, toolUseId: 'tu_1' });
-    expect(m.resolveByToolUseId('s2', 'tu_1', { decision: 'ask' })).toBe(0);
+    expect(m.resolveByToolUseId('s2', 'tu_1', { decision: 'ask' })).toBe(null);
   });
   it('after resolveByToolUseId, the entry is gone from pendingForSession', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
@@ -113,66 +113,66 @@ describe('ApprovalManager — resolveByToolUseId', () => {
 });
 
 describe('ApprovalManager — resolveByFingerprint', () => {
-  it('resolves single match without toolUseId, returns 1', async () => {
+  it('resolves single match without toolUseId, returns the resolved requestId', async () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
     const { request, decision } = m.open({
       sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' },
     });
     const fp = request.toolInputFingerprint;
-    expect(m.resolveByFingerprint('s', 'Bash', fp, { decision: 'deny', reason: 'x' })).toBe(1);
+    expect(m.resolveByFingerprint('s', 'Bash', fp, { decision: 'deny', reason: 'x' })).toBe(request.requestId);
     await expect(decision).resolves.toEqual({ decision: 'deny', reason: 'x' });
   });
-  it('returns 0 when set has 2+ entries with same fingerprint (ambiguous)', () => {
+  it('returns null when set has 2+ entries with same fingerprint (ambiguous)', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
     const a = m.open({ sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' } }).request;
     m.open({ sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' } });
-    expect(m.resolveByFingerprint('s', 'Bash', a.toolInputFingerprint, { decision: 'ask' })).toBe(0);
+    expect(m.resolveByFingerprint('s', 'Bash', a.toolInputFingerprint, { decision: 'ask' })).toBe(null);
   });
-  it('returns 0 when matching entry has toolUseId (canonical match should have caught it)', () => {
+  it('returns null when matching entry has toolUseId (canonical match should have caught it)', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
     const { request } = m.open({
       sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' }, toolUseId: 'tu_1',
     });
-    expect(m.resolveByFingerprint('s', 'Bash', request.toolInputFingerprint, { decision: 'ask' })).toBe(0);
+    expect(m.resolveByFingerprint('s', 'Bash', request.toolInputFingerprint, { decision: 'ask' })).toBe(null);
   });
-  it('returns 0 when no fingerprint match', () => {
+  it('returns null when no fingerprint match', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
-    expect(m.resolveByFingerprint('s', 'Bash', 'a'.repeat(64), { decision: 'ask' })).toBe(0);
+    expect(m.resolveByFingerprint('s', 'Bash', 'a'.repeat(64), { decision: 'ask' })).toBe(null);
   });
-  it('returns 0 when toolName differs', () => {
+  it('returns null when toolName differs', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
     const { request } = m.open({ sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' } });
-    expect(m.resolveByFingerprint('s', 'Edit', request.toolInputFingerprint, { decision: 'ask' })).toBe(0);
+    expect(m.resolveByFingerprint('s', 'Edit', request.toolInputFingerprint, { decision: 'ask' })).toBe(null);
   });
-  it('returns 0 when sessionId differs', () => {
+  it('returns null when sessionId differs', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
     const { request } = m.open({ sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' } });
-    expect(m.resolveByFingerprint('s2', 'Bash', request.toolInputFingerprint, { decision: 'ask' })).toBe(0);
+    expect(m.resolveByFingerprint('s2', 'Bash', request.toolInputFingerprint, { decision: 'ask' })).toBe(null);
   });
 });
 
 describe('ApprovalManager — resolveSingletonForSession', () => {
-  it('resolves the only pending entry for a session, returns 1', async () => {
+  it('resolves the only pending entry for a session, returns the resolved requestId', async () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
-    const { decision } = m.open({ sessionId: 's', tool: 'Bash', toolInput: {} });
-    expect(m.resolveSingletonForSession('s', { decision: 'deny', reason: 'r' })).toBe(1);
+    const { request, decision } = m.open({ sessionId: 's', tool: 'Bash', toolInput: {} });
+    expect(m.resolveSingletonForSession('s', { decision: 'deny', reason: 'r' })).toBe(request.requestId);
     await expect(decision).resolves.toEqual({ decision: 'deny', reason: 'r' });
   });
-  it('returns 0 when 0 pending entries', () => {
+  it('returns null when 0 pending entries', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
-    expect(m.resolveSingletonForSession('s', { decision: 'ask' })).toBe(0);
+    expect(m.resolveSingletonForSession('s', { decision: 'ask' })).toBe(null);
   });
-  it('returns 0 when 2+ pending entries (ambiguous)', () => {
+  it('returns null when 2+ pending entries (ambiguous)', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
     m.open({ sessionId: 's', tool: 'Bash', toolInput: {} });
     m.open({ sessionId: 's', tool: 'Edit', toolInput: {} });
-    expect(m.resolveSingletonForSession('s', { decision: 'ask' })).toBe(0);
+    expect(m.resolveSingletonForSession('s', { decision: 'ask' })).toBe(null);
   });
   it('only counts entries for the given session', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
-    m.open({ sessionId: 's1', tool: 'Bash', toolInput: {} });
+    const a = m.open({ sessionId: 's1', tool: 'Bash', toolInput: {} });
     m.open({ sessionId: 's2', tool: 'Bash', toolInput: {} });
-    expect(m.resolveSingletonForSession('s1', { decision: 'allow' })).toBe(1);
+    expect(m.resolveSingletonForSession('s1', { decision: 'allow' })).toBe(a.request.requestId);
   });
 });
 
@@ -191,20 +191,20 @@ describe('ApprovalManager — same (sessionId, toolUseId) opened twice', () => {
     // entry B; without the guard, the index was already deleted by A's cleanup
     // and this returns 0.
     const resolved = m.resolveByToolUseId('s', 'tu_1', { decision: 'deny', reason: 'r' });
-    expect(resolved).toBe(1);
+    expect(resolved).toBe(b.request.requestId);
     await expect(b.decision).resolves.toEqual({ decision: 'deny', reason: 'r' });
   });
 
   it('second entry resolving via toolUseId leaves no stale index entries', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
     m.open({ sessionId: 's', tool: 'Bash', toolInput: {}, toolUseId: 'tu_1' });
-    m.open({ sessionId: 's', tool: 'Bash', toolInput: {}, toolUseId: 'tu_1' });   // overwrites pointer
+    const second = m.open({ sessionId: 's', tool: 'Bash', toolInput: {}, toolUseId: 'tu_1' });   // overwrites pointer
     // resolveByToolUseId picks the second (newest pointed-at) entry. Its
     // cleanup removes the index. The first entry, when it eventually times
     // out, will see the index is already gone (or no longer points at it).
-    expect(m.resolveByToolUseId('s', 'tu_1', { decision: 'allow' })).toBe(1);
+    expect(m.resolveByToolUseId('s', 'tu_1', { decision: 'allow' })).toBe(second.request.requestId);
     // A subsequent lookup must miss — neither entry should still be indexed.
-    expect(m.resolveByToolUseId('s', 'tu_1', { decision: 'allow' })).toBe(0);
+    expect(m.resolveByToolUseId('s', 'tu_1', { decision: 'allow' })).toBe(null);
   });
 });
 
