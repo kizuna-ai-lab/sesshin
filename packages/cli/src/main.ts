@@ -48,7 +48,12 @@ export async function mainWithDeps(deps: MainDeps): Promise<number | null> {
     }
   }
 
-  try { return await dispatch(deps, cmd, rest); } catch { return 1; }
+  try {
+    return await dispatch(deps, cmd, rest);
+  } catch (e) {
+    deps.stderr.write(`fatal: ${(e as { stack?: string })?.stack ?? String(e)}\n`);
+    return 1;
+  }
 }
 
 async function dispatch(deps: MainDeps, cmd: string | undefined, rest: string[]): Promise<number | null> {
