@@ -37,7 +37,16 @@ export function upsertSession(s: SessionInfo): void {
     ? existing.map((x, i) => (i === idx ? s : x))
     : [...existing, s];
 }
-export function removeSession(id: string): void { sessions.value = sessions.value.filter((s) => s.id !== id); }
+export function removeSession(id: string): void {
+  sessions.value = sessions.value.filter((s) => s.id !== id);
+  // also clear any pending prompt-cards for this session.
+  // Prevents stale cards lingering after the agent exits / unregisters.
+  if (id in promptRequestsBySession.value) {
+    const next = { ...promptRequestsBySession.value };
+    delete next[id];
+    promptRequestsBySession.value = next;
+  }
+}
 
 export function applyConfigChanged(sessionId: string, config: {
   pin: string | null;
