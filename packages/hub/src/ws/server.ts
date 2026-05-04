@@ -19,8 +19,16 @@ export interface WsServerDeps {
    * Called when a client posts a prompt-response for a pending
    * session.prompt-request. Returns whether a matching pending request was
    * found (false → stale or already resolved by another client/timeout).
+   *
+   * `clientKind` is the kind from client.identify; used to attribute
+   * the resolution in the broadcast (resolvedBy='remote-adapter:<kind>').
    */
-  onPromptResponse?: (sessionId: string, requestId: string, answers: import('@sesshin/shared').PromptResponse['answers']) => boolean;
+  onPromptResponse?: (
+    sessionId: string,
+    requestId: string,
+    answers: import('@sesshin/shared').PromptResponse['answers'],
+    clientKind: string,
+  ) => boolean;
   /**
    * Called when the last `actions`-capable client subscribed to `sessionId`
    * disconnects (or unsubscribes). Sesshin uses this to release any pending
@@ -61,6 +69,7 @@ function capabilityRequiredFor(msgType: string): string | null {
     case 'session.attention':            return 'attention';
     case 'session.prompt-request':
     case 'session.prompt-request.resolved': return 'actions';
+    case 'session.config-changed':       return 'state';
     case 'session.state':
     case 'session.list':
     case 'session.added':

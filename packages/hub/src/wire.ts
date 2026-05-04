@@ -418,7 +418,7 @@ export async function startHub(): Promise<HubInstance> {
       approvals.cancelOnLastClientGone(sessionId);
       log.info({ sessionId, cancelled: pending.length }, 'released pending approvals: last actions-client gone');
     },
-    onPromptResponse: (sessionId, requestId, answers) => {
+    onPromptResponse: (sessionId, requestId, answers, clientKind) => {
       const slot = pendingHandlers.get(requestId);
       if (!slot) return false;
       pendingHandlers.delete(requestId);
@@ -467,6 +467,7 @@ export async function startHub(): Promise<HubInstance> {
         ws.broadcast({
           type: 'session.prompt-request.resolved',
           sessionId, requestId, reason: 'decided',
+          resolvedBy: `remote-adapter:${clientKind}`,
         });
         historyStore.push(sessionId, {
           requestId, tool: slot.tool, resolvedAt: Date.now(),

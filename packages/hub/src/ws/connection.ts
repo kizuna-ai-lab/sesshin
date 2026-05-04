@@ -220,8 +220,14 @@ function handleUpstream(
     return;
   }
   if (msg.type === 'prompt-response') {
-    const ok = deps.onPromptResponse?.(msg.sessionId, msg.requestId, msg.answers) ?? false;
-    if (!ok) state.ws.send(JSON.stringify({ type: 'server.error', code: 'prompt-stale', message: 'no pending prompt-request for that requestId' }));
+    const ok = deps.onPromptResponse?.(
+      msg.sessionId, msg.requestId, msg.answers,
+      state.kind ?? 'unknown',
+    ) ?? false;
+    if (!ok) state.ws.send(JSON.stringify({
+      type: 'server.error', code: 'prompt-stale',
+      message: 'no pending prompt-request for that requestId'
+    }));
     return;
   }
   if (msg.type === 'input.action' || msg.type === 'input.text') {
