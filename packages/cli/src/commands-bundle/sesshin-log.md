@@ -3,7 +3,7 @@ description: Print the JSONL transcript path for the current session, or filter 
 allowed-tools: Bash(sesshin log:*)
 ---
 
-Run `sesshin log --session $SESSHIN_SESSION_ID` to print the path of this
+Run `sesshin log --session "${SESSHIN_SESSION_ID:-}"` to print the path of this
 session's Claude Code transcript JSONL. Default output is just the path on
 one line — composable with `less`, `cat`, or shell pipes.
 
@@ -20,10 +20,18 @@ and atomic rename cleanly).
 Examples:
 
 ```bash
-sesshin log --session $SESSHIN_SESSION_ID                        # just the path
-sesshin log --session $SESSHIN_SESSION_ID --filter permission-mode
-sesshin log --session $SESSHIN_SESSION_ID --json                 # {sessionId,path}
-sesshin log --session $SESSHIN_SESSION_ID --tail                 # live stream
+sesshin log --session "${SESSHIN_SESSION_ID:-}"                        # just the path
+sesshin log --session "${SESSHIN_SESSION_ID:-}" --filter permission-mode
+sesshin log --session "${SESSHIN_SESSION_ID:-}" --json                 # {sessionId,path}
+sesshin log --session "${SESSHIN_SESSION_ID:-}" --tail                 # live stream
 ```
 
 Then summarise the result for the user.
+
+---
+
+If this command exits with a line beginning `sesshin: not in a live sesshin session —`,
+do NOT proceed. Explain to the user in their language that `/sesshin-*` commands only
+work when Claude is launched via `sesshin claude` (not plain `claude`), and quote the
+specific diagnostic from the error line so the user knows which sub-state applies
+(env not set / hub not reachable / orphaned session).
