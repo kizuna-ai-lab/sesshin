@@ -200,6 +200,7 @@ export async function startHub(): Promise<HubInstance> {
         wsRef?.broadcast({
           type: 'session.prompt-request.resolved',
           sessionId, requestId: rid, reason: 'cancelled-tool-completed',
+          resolvedBy: 'hub-stale-cleanup',
         });
       }
     },
@@ -252,6 +253,7 @@ export async function startHub(): Promise<HubInstance> {
           wsRef?.broadcast({
             type: 'session.prompt-request.resolved',
             sessionId: a.sessionId, requestId: a.requestId, reason: 'timeout',
+            resolvedBy: null,
           });
         },
         origin: rendered.origin ?? 'permission',
@@ -327,6 +329,7 @@ export async function startHub(): Promise<HubInstance> {
           wsRef?.broadcast({
             type: 'session.prompt-request.resolved',
             sessionId: a.sessionId, requestId: a.requestId, reason: 'timeout',
+            resolvedBy: null,
           });
         },
         origin: rendered.origin ?? 'permission',
@@ -413,6 +416,7 @@ export async function startHub(): Promise<HubInstance> {
         wsRef?.broadcast({
           type: 'session.prompt-request.resolved',
           sessionId, requestId: a.requestId, reason: 'cancelled-no-clients',
+          resolvedBy: null,
         });
       }
       approvals.cancelOnLastClientGone(sessionId);
@@ -492,6 +496,7 @@ export async function startHub(): Promise<HubInstance> {
       wsRef?.broadcast({
         type: 'session.prompt-request.resolved',
         sessionId: id, requestId: a.requestId, reason: 'session-ended',
+        resolvedBy: null,
       });
     }
     approvals.cancelForSession(id);
