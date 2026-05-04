@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { fingerprintToolInput } from '@sesshin/shared';
 import type { PromptQuestion } from '@sesshin/shared';
+import type { PromptOrigin } from './agents/claude/tool-handlers/types.js';
 
 export type Decision = 'allow' | 'deny' | 'ask';
 export interface ApprovalOutcome { decision: Decision; reason?: string }
 
-export type PromptOrigin =
-  'permission' | 'ask-user-question' | 'exit-plan-mode' | 'enter-plan-mode';
+export type { PromptOrigin };
 
 export interface PendingApproval {
   requestId: string;
@@ -78,7 +78,6 @@ export class ApprovalManager {
     toolUseId?: string;
     timeoutMs?: number;
     onExpire?: (a: PendingApproval) => void;
-    // NEW:
     origin: PromptOrigin;
     body?: string;
     questions: PromptQuestion[];

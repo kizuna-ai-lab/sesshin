@@ -13,10 +13,16 @@ export interface PromptAnswer {
   notes?: string | undefined;
 }
 
+export type PromptOrigin =
+  | 'permission'
+  | 'ask-user-question'
+  | 'exit-plan-mode'
+  | 'enter-plan-mode';
+
 export interface RenderOutput {
   body?: string;
   questions: PromptQuestion[];
-  origin?: 'permission' | 'ask-user-question' | 'exit-plan-mode' | 'enter-plan-mode';
+  origin?: PromptOrigin;
 }
 
 export type HookDecision =
