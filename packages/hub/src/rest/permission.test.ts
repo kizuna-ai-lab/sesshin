@@ -330,6 +330,7 @@ describe('integration: PermissionRequest opt-in suppresses subsequent PreToolUse
     // Open an approval directly so the PostToolUse cleanup has something to find.
     const { request } = approvals.open({
       sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' }, toolUseId: 'tu_stale',
+      origin: 'permission', questions: [],
     });
 
     const r = await fetch(`http://127.0.0.1:${port}/hooks`, {
@@ -381,6 +382,7 @@ describe('integration: PermissionRequest opt-in suppresses subsequent PreToolUse
           sessionId: env.sessionId, tool: 'Bash',
           toolInput: env.raw['tool_input'] ?? {},
           ...(tuid !== undefined ? { toolUseId: tuid } : {}),
+          origin: 'permission', questions: [],
         });
         const out = await decision;
         resolvedDecision = out;

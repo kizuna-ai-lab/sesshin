@@ -237,8 +237,8 @@ describe('ApprovalManager origin/body/questions storage', () => {
   it('open() requires origin and questions; pendingForSession returns them', () => {
     const m = new ApprovalManager({ defaultTimeoutMs: 60_000 });
     const questions: PromptQuestion[] = [
-      { kind: 'options', id: 'q1', prompt: 'Allow?',
-        options: [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }] },
+      { prompt: 'Allow?', multiSelect: false, allowFreeText: false,
+        options: [{ key: 'yes', label: 'Yes' }, { key: 'no', label: 'No' }] },
     ];
     m.open({
       sessionId: 's', tool: 'Bash', toolInput: { command: 'ls' },

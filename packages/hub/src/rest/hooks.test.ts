@@ -68,6 +68,7 @@ describe('/hooks — stale cleanup', () => {
   it('PostToolUse with matching tool_use_id resolves pending approval', async () => {
     const { decision } = approvals.open({
       sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' }, toolUseId: 'tu_1',
+      origin: 'permission', questions: [],
     });
     const r = await post('PostToolUse', {
       nativeEvent: 'PostToolUse', tool_name: 'Bash',
@@ -80,6 +81,7 @@ describe('/hooks — stale cleanup', () => {
   it('PostToolUse without tool_use_id but matching fingerprint resolves it', async () => {
     const { decision } = approvals.open({
       sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' },
+      origin: 'permission', questions: [],
     });
     const r = await post('PostToolUse', {
       nativeEvent: 'PostToolUse', tool_name: 'Bash',
@@ -91,6 +93,7 @@ describe('/hooks — stale cleanup', () => {
   it('PostToolUseFailure cleans up the same way (uses normalized event)', async () => {
     const { decision } = approvals.open({
       sessionId: 's1', tool: 'Bash', toolInput: {}, toolUseId: 'tu_2',
+      origin: 'permission', questions: [],
     });
     await post('PostToolUseFailure', {
       nativeEvent: 'PostToolUseFailure', tool_name: 'Bash',
@@ -101,19 +104,20 @@ describe('/hooks — stale cleanup', () => {
   it('Stop with no toolUseId/fingerprint match falls back to singleton', async () => {
     const { decision } = approvals.open({
       sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' },
+      origin: 'permission', questions: [],
     });
     await post('Stop', { nativeEvent: 'Stop' });
     await expect(decision).resolves.toMatchObject({ decision: 'deny' });
   });
   it('Stop does NOT singleton-resolve when 2+ pending entries', async () => {
-    approvals.open({ sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' } });
-    approvals.open({ sessionId: 's1', tool: 'Edit', toolInput: { file: 'x' } });
+    approvals.open({ sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' }, origin: 'permission', questions: [] });
+    approvals.open({ sessionId: 's1', tool: 'Edit', toolInput: { file: 'x' }, origin: 'permission', questions: [] });
     await post('Stop', { nativeEvent: 'Stop' });
     expect(approvals.pendingForSession('s1')).toHaveLength(2);
   });
   it('PostToolUse without tool_use_id and 2 same-fingerprint entries → no cleanup', async () => {
-    approvals.open({ sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' } });
-    approvals.open({ sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' } });
+    approvals.open({ sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' }, origin: 'permission', questions: [] });
+    approvals.open({ sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' }, origin: 'permission', questions: [] });
     await post('PostToolUse', {
       nativeEvent: 'PostToolUse', tool_name: 'Bash',
       tool_input: { command: 'ls' },
@@ -121,7 +125,7 @@ describe('/hooks — stale cleanup', () => {
     expect(approvals.pendingForSession('s1')).toHaveLength(2);
   });
   it('UserPromptSubmit (irrelevant event) does nothing', async () => {
-    approvals.open({ sessionId: 's1', tool: 'Bash', toolInput: {}, toolUseId: 'tu_x' });
+    approvals.open({ sessionId: 's1', tool: 'Bash', toolInput: {}, toolUseId: 'tu_x', origin: 'permission', questions: [] });
     await post('UserPromptSubmit', { nativeEvent: 'UserPromptSubmit' });
     expect(approvals.pendingForSession('s1')).toHaveLength(1);
   });

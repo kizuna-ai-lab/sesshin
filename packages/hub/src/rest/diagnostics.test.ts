@@ -51,7 +51,7 @@ describe('GET /api/diagnostics', () => {
 
   it('reflects pending approvals count', async () => {
     registry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    approvals.open({ sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' }, timeoutMs: 60_000 });
+    approvals.open({ sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' }, timeoutMs: 60_000, origin: 'permission', questions: [] });
     const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
     const j = await r.json();
     expect(j.sessions[0].pendingApprovals).toBe(1);
