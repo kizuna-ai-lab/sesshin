@@ -14,7 +14,12 @@ export interface WsServerDeps {
   bus:      EventBus;
   tap:      PtyTap;
   staticDir: string | null;
-  /** Used by subscribe-replay in connection.ts to push pending prompt-requests to late-joining clients. */
+  /**
+   * Provides current pending approvals to the subscribe handler so late-joining
+   * clients can replay them as session.prompt-request frames. Optional only to
+   * keep test fixtures terse — production callers (wire.ts) MUST pass this.
+   * Omitting it silently disables subscribe-time replay (issue #5 fix).
+   */
   approvals?: ApprovalManager;
   /** Called when a WS client sends an input.action or input.text. Wired in T38. */
   onInput?: (sessionId: string, data: string, source: string) => Promise<{ ok: boolean; reason?: string }>;

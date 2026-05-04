@@ -315,10 +315,12 @@ describe('subscribe-time replay of pending prompt-requests', () => {
     liveClient.send(JSON.stringify({ type: 'subscribe', sessions: [sid], since: null }));
     await waitFor(() => liveFrames.some((f) => f.type === 'session.list'));
 
-    // Manually broadcast a synthetic 'live' frame matching what wire.ts would build
-    // in onPreToolUseApproval / onPermissionRequestApproval.
-    // This exercises the svr.broadcast routing path (same as wire.ts uses).
-    // The shape here is the source of truth for what wire.ts emits.
+    // liveBroadcastShape must be kept in sync with wire.ts's broadcast literals
+    // at packages/hub/src/wire.ts (the two onPreToolUseApproval and
+    // onPermissionRequestApproval handlers). Drift between this literal and
+    // wire.ts will cause silent test passes — the spec calls this out as a
+    // known limitation. The connection.ts replay literal is the only thing
+    // being directly exercised here.
     const liveBroadcastShape = {
       type: 'session.prompt-request',
       sessionId: sid,
