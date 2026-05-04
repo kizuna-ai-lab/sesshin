@@ -393,7 +393,7 @@ export async function startHub(): Promise<HubInstance> {
   const __dirname = dirname(__filename);
   const staticDir = join(__dirname, 'web');
   const ws = createWsServer({
-    registry, bus: dedupedBus, tap, staticDir,
+    registry, bus: dedupedBus, tap, staticDir, approvals,
     onInput: async (sessionId, data, source) => {
       const r = await bridge.deliver(sessionId, data, source);
       return { ok: r.ok, ...(r.reason !== undefined ? { reason: r.reason } : {}) };

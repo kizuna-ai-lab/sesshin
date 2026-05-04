@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net';
 import type { SessionRegistry } from '../registry/session-registry.js';
 import type { EventBus } from '../event-bus.js';
 import type { PtyTap } from '../observers/pty-tap.js';
+import type { ApprovalManager } from '../approval-manager.js';
 import { handleConnection, type BroadcastTarget } from './connection.js';
 
 export interface WsServerDeps {
@@ -13,6 +14,8 @@ export interface WsServerDeps {
   bus:      EventBus;
   tap:      PtyTap;
   staticDir: string | null;
+  /** Used by subscribe-replay in connection.ts to push pending prompt-requests to late-joining clients. */
+  approvals?: ApprovalManager;
   /** Called when a WS client sends an input.action or input.text. Wired in T38. */
   onInput?: (sessionId: string, data: string, source: string) => Promise<{ ok: boolean; reason?: string }>;
   /**

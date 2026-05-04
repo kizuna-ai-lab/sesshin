@@ -164,16 +164,23 @@ function handleUpstream(
     const next = msg.sessions === 'all'
       ? new Set(deps.registry.list().map((s) => s.id))
       : new Set<string>(msg.sessions);
+
+    // Compute newly-added sessions from this subscribe (used for replay below).
+    // Must be computed BEFORE state.subscribedTo is mutated.
+    const prevForReplay = state.subscribedTo === 'all'
+      ? new Set(deps.registry.list().map((s) => s.id))
+      : state.subscribedTo;
+    const addedForReplay = new Set<string>();
+    for (const id of next) if (!prevForReplay.has(id)) addedForReplay.add(id);
+
     if (hasActions) {
       // When state.subscribedTo === 'all', every session in the LIVE registry was
       // incremented for this client: either at the original subscribe (snapshot)
       // or via the session-added listener for sessions added afterwards. So
       // diffing against the live registry is correct symmetric bookkeeping.
-      const prev = state.subscribedTo === 'all'
-        ? new Set(deps.registry.list().map((s) => s.id))
-        : state.subscribedTo;
-      for (const id of next) if (!prev.has(id)) bumpActions(id, 1);
-      for (const id of prev) if (!next.has(id)) bumpActions(id, -1);
+      // Note: prevForReplay is the same as `prev` here; reuse it for consistency.
+      for (const id of next) if (!prevForReplay.has(id)) bumpActions(id, 1);
+      for (const id of prevForReplay) if (!next.has(id)) bumpActions(id, -1);
     }
     state.subscribedTo = msg.sessions === 'all' ? 'all' : new Set(msg.sessions);
     // If now subscribed 'all', start tracking new sessions; otherwise stop.
@@ -181,6 +188,27 @@ function handleUpstream(
     else                              allSub.detachAllListener();
     if (state.capabilities.has('state')) {
       state.ws.send(JSON.stringify({ type: 'session.list', sessions: deps.registry.list() }));
+    }
+    // Replay current pending prompt-requests for newly-added sessions.
+    // Only sessions that just appeared in the subscription set (addedForReplay)
+    // get a replay — overlap (already-subscribed) sessions don't need re-sending
+    // because the live broadcast path already delivered everything.
+    if (state.capabilities.has('actions') && deps.approvals !== undefined) {
+      for (const sid of addedForReplay) {
+        for (const entry of deps.approvals.pendingForSession(sid)) {
+          state.ws.send(JSON.stringify({
+            type: 'session.prompt-request',
+            sessionId: entry.sessionId,
+            requestId: entry.requestId,
+            origin: entry.origin,
+            toolName: entry.tool,
+            ...(entry.toolUseId !== undefined ? { toolUseId: entry.toolUseId } : {}),
+            expiresAt: entry.expiresAt,
+            ...(entry.body !== undefined ? { body: entry.body } : {}),
+            questions: entry.questions,
+          }));
+        }
+      }
     }
     if (msg.since && state.capabilities.has('events')) {
       const sids = state.subscribedTo === 'all' ? deps.registry.list().map((s) => s.id) : Array.from(state.subscribedTo);
