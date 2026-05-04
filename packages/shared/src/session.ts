@@ -56,5 +56,12 @@ export const SessionInfoSchema = z.object({
    * UIs can offer "open log" / "copy log path" affordances.
    */
   sessionFilePath: z.string().optional(),
+  // Sticky user-set session config. All three are nullable+optional:
+  // - missing: schema-level backwards compatibility for old payloads
+  // - null:    explicitly unset (default after register())
+  // - value:   user has set this via `sesshin pin/quiet/gate` etc.
+  pin:                 z.string().nullable().optional(),
+  quietUntil:          z.number().int().nullable().optional(),
+  sessionGateOverride: z.enum(['disabled','auto','always']).nullable().optional(),
 });
 export type SessionInfo = z.infer<typeof SessionInfoSchema>;

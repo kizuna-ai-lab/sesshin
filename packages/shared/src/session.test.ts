@@ -33,6 +33,52 @@ describe('session schemas', () => {
     expect(() => SessionInfoSchema.parse({ id: 'x' })).toThrow();
   });
 });
+describe('SessionInfoSchema sticky config fields', () => {
+  const base = {
+    id: 's', name: 'n', agent: 'claude-code' as const,
+    cwd: '/x', pid: 1, startedAt: 0,
+    state: 'idle' as const,
+    substate: {
+      currentTool: null, lastTool: null, lastFileTouched: null,
+      lastCommandRun: null, elapsedSinceProgressMs: 0, tokensUsedTurn: null,
+      connectivity: 'ok' as const, stalled: false,
+      permissionMode: 'default' as const, compacting: false, cwd: null,
+    },
+    lastSummaryId: null,
+  };
+
+  it('accepts pin / quietUntil / sessionGateOverride as null', () => {
+    const r = SessionInfoSchema.parse({
+      ...base, pin: null, quietUntil: null, sessionGateOverride: null,
+    });
+    expect(r.pin).toBeNull();
+    expect(r.quietUntil).toBeNull();
+    expect(r.sessionGateOverride).toBeNull();
+  });
+
+  it('accepts pin / quietUntil / sessionGateOverride as concrete values', () => {
+    const r = SessionInfoSchema.parse({
+      ...base, pin: 'deploying', quietUntil: 1700000000000,
+      sessionGateOverride: 'always',
+    });
+    expect(r.pin).toBe('deploying');
+    expect(r.quietUntil).toBe(1700000000000);
+    expect(r.sessionGateOverride).toBe('always');
+  });
+
+  it('accepts the three fields as missing (backwards compat)', () => {
+    const r = SessionInfoSchema.parse(base);
+    expect(r.pin).toBeUndefined();
+    expect(r.quietUntil).toBeUndefined();
+    expect(r.sessionGateOverride).toBeUndefined();
+  });
+
+  it('rejects invalid sessionGateOverride enum value', () => {
+    expect(() => SessionInfoSchema.parse({
+      ...base, sessionGateOverride: 'sometimes',
+    })).toThrow();
+  });
+});
 describe('actions', () => {
   it('accepts the lone TTY-shortcut "stop"', () => {
     expect(ActionEnum.parse('stop')).toBe('stop');
