@@ -33,6 +33,12 @@ export async function requireLiveSession(deps: RequireSessionDeps): Promise<Requ
   const hubUrl = deps.env.SESSHIN_HUB_URL ?? DEFAULT_HUB_URL;
   const timeoutMs = deps.hubProbeTimeoutMs ?? DEFAULT_TIMEOUT_MS;
 
+  const hubDown: RequireSessionResult = {
+    ok: false,
+    reason: 'hub-down',
+    message: `${PREFIX}hub at ${hubUrl} is not reachable. The sesshin hub may have crashed; restart with 'sesshin claude'.`,
+  };
+
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   let status: number;
@@ -40,11 +46,7 @@ export async function requireLiveSession(deps: RequireSessionDeps): Promise<Requ
     const r = await deps.fetch(`${hubUrl}/api/sessions/${sid}`, { signal: ac.signal });
     status = r.status;
   } catch {
-    return {
-      ok: false,
-      reason: 'hub-down',
-      message: `${PREFIX}hub at ${hubUrl} is not reachable. The sesshin hub may have crashed; restart with 'sesshin claude'.`,
-    };
+    return hubDown;
   } finally {
     clearTimeout(timer);
   }
@@ -57,11 +59,7 @@ export async function requireLiveSession(deps: RequireSessionDeps): Promise<Requ
     };
   }
   if (status < 200 || status >= 300) {
-    return {
-      ok: false,
-      reason: 'hub-down',
-      message: `${PREFIX}hub at ${hubUrl} is not reachable. The sesshin hub may have crashed; restart with 'sesshin claude'.`,
-    };
+    return hubDown;
   }
   return { ok: true, sessionId: sid, hubUrl };
 }
