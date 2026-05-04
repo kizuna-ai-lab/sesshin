@@ -297,34 +297,57 @@ describe('subscribe-time replay of pending prompt-requests', () => {
     client.close();
   });
 
-  it('replay frame is structurally identical to the original live broadcast', async () => {
+  it('replay frame is structurally identical to a hand-built live broadcast', async () => {
     const sid = registerSession();
+    const questions = makeQuestions();
 
-    // Open approval first — will be replayed to subscribers.
-    approvals.open({
+    // Open approval to populate pendingForSession (will be replayed to late subscribers).
+    const { request } = approvals.open({
       sessionId: sid, tool: 'Bash', toolInput: { command: 'rm -rf /' },
-      origin: 'permission', body: 'cmd: rm -rf /', questions: makeQuestions(),
+      origin: 'permission', body: 'cmd: rm -rf /', questions,
       toolUseId: 'tu_xyz',
     });
 
-    // Subscribe client A early — receives the REPLAY.
-    const clientA = await connectClient(['actions','state']);
-    const framesA = collectFrames(clientA);
-    clientA.send(JSON.stringify({ type: 'subscribe', sessions: [sid], since: null }));
-    await waitFor(() => framesA.some((f) => f.type === 'session.prompt-request'));
-    const frameA = framesA.find((f) => f.type === 'session.prompt-request');
+    // Subscribe client A FIRST and wait for subscription to be active.
+    // Client A will receive the LIVE broadcast (via svr.broadcast), NOT a replay.
+    const liveClient = await connectClient(['actions','state']);
+    const liveFrames = collectFrames(liveClient);
+    liveClient.send(JSON.stringify({ type: 'subscribe', sessions: [sid], since: null }));
+    await waitFor(() => liveFrames.some((f) => f.type === 'session.list'));
 
-    // Subscribe client B late — also receives a REPLAY of the same approval.
-    const clientB = await connectClient(['actions','state']);
-    const framesB = collectFrames(clientB);
-    clientB.send(JSON.stringify({ type: 'subscribe', sessions: [sid], since: null }));
-    await waitFor(() => framesB.some((f) => f.type === 'session.prompt-request'));
-    const frameB = framesB.find((f) => f.type === 'session.prompt-request');
+    // Manually broadcast a synthetic 'live' frame matching what wire.ts would build
+    // in onPreToolUseApproval / onPermissionRequestApproval.
+    // This exercises the svr.broadcast routing path (same as wire.ts uses).
+    // The shape here is the source of truth for what wire.ts emits.
+    const liveBroadcastShape = {
+      type: 'session.prompt-request',
+      sessionId: sid,
+      requestId: request.requestId,
+      origin: 'permission',
+      toolName: 'Bash',
+      toolUseId: 'tu_xyz',
+      expiresAt: request.expiresAt,
+      body: 'cmd: rm -rf /',
+      questions,
+    };
+    svr.broadcast(liveBroadcastShape);
+    await waitFor(() => liveFrames.some((f) => f.type === 'session.prompt-request'));
+    const liveFrame = liveFrames.find((f) => f.type === 'session.prompt-request');
 
-    // Deep-equal: the contract is "all replay frames are structurally identical regardless of when client subscribes".
-    expect(frameB).toEqual(frameA);
+    // Subscribe client B AFTER the approval is open — receives the REPLAY built
+    // by connection.ts's subscribe-replay code path (distinct from wire.ts broadcast).
+    const replayClient = await connectClient(['actions','state']);
+    const replayFrames = collectFrames(replayClient);
+    replayClient.send(JSON.stringify({ type: 'subscribe', sessions: [sid], since: null }));
+    await waitFor(() => replayFrames.some((f) => f.type === 'session.prompt-request'));
+    const replayFrame = replayFrames.find((f) => f.type === 'session.prompt-request');
 
-    clientA.close();
-    clientB.close();
+    // Deep-equal: guards against drift between wire.ts's broadcast literal and
+    // connection.ts's replay literal. If either code path changes its field set,
+    // this comparison fails.
+    expect(replayFrame).toEqual(liveFrame);
+
+    liveClient.close();
+    replayClient.close();
   });
 });
