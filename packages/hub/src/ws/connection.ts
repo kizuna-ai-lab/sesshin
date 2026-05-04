@@ -122,10 +122,21 @@ function attachSubscribed(state: ConnectionState, deps: WsServerDeps): void {
     if (!isSubscribed(state, s.id) || !state.capabilities.has('state')) return;
     state.ws.send(JSON.stringify({ type: 'session.state', sessionId: s.id, state: s.state, substate: s.substate }));
   };
+  const onConfigChanged = (s: any): void => {
+    if (!isSubscribed(state, s.id) || !state.capabilities.has('state')) return;
+    state.ws.send(JSON.stringify({
+      type: 'session.config-changed',
+      sessionId: s.id,
+      pin: s.pin ?? null,
+      quietUntil: s.quietUntil ?? null,
+      sessionGateOverride: s.sessionGateOverride ?? null,
+    }));
+  };
   deps.registry.on('session-added', onAdded);
   deps.registry.on('session-removed', onRemoved);
   deps.registry.on('state-changed', onState);
   deps.registry.on('substate-changed', onState);
+  deps.registry.on('config-changed', onConfigChanged);
 
   const onEvent = (e: any): void => {
     if (!isSubscribed(state, e.sessionId)) return;
@@ -139,6 +150,7 @@ function attachSubscribed(state: ConnectionState, deps: WsServerDeps): void {
     deps.registry.off('session-removed', onRemoved);
     deps.registry.off('state-changed', onState);
     deps.registry.off('substate-changed', onState);
+    deps.registry.off('config-changed', onConfigChanged);
     deps.bus.off(onEvent);
   });
 }
