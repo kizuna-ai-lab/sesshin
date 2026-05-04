@@ -19,17 +19,15 @@ describe('pickFlag', () => {
   });
 });
 
-function makeDeps(over: Partial<MainDeps> = {}): { deps: MainDeps; stderr: string[]; stdout: string[] } {
+function makeDeps(over: Partial<MainDeps> = {}): { deps: MainDeps; stderr: string[] } {
   const stderr: string[] = [];
-  const stdout: string[] = [];
   return {
-    stderr, stdout,
+    stderr,
     deps: {
       argv: over.argv ?? [],
       env: over.env ?? {},
       fetch: over.fetch ?? ((async () => new Response(null, { status: 200 })) as typeof globalThis.fetch),
       stderr: { write: (s) => { stderr.push(s); return true; } },
-      stdout: { write: (s) => { stdout.push(s); return true; } },
     },
   };
 }

@@ -18,7 +18,6 @@ export interface MainDeps {
   env: { SESSHIN_SESSION_ID?: string; SESSHIN_HUB_URL?: string };
   fetch: typeof globalThis.fetch;
   stderr: { write: (s: string) => boolean | void };
-  stdout: { write: (s: string) => boolean | void };
 }
 
 export async function main(): Promise<number | null> {
@@ -27,7 +26,6 @@ export async function main(): Promise<number | null> {
     env: process.env as MainDeps['env'],
     fetch: globalThis.fetch,
     stderr: process.stderr,
-    stdout: process.stdout,
   });
 }
 
