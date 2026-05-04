@@ -163,7 +163,19 @@ export const SessionPromptRequestResolvedSchema = z.object({
   type:       z.literal('session.prompt-request.resolved'),
   sessionId:  z.string(),
   requestId:  z.string(),
-  reason:     z.enum(['decided','timeout','cancelled-no-clients','session-ended']),
+  reason:     z.enum([
+    'decided',
+    'timeout',
+    'cancelled-no-clients',
+    'cancelled-tool-completed',
+    'session-ended',
+  ]),
+  // Identifies who caused the resolution. Lets clients render UX
+  // distinguishing "approved by another client" from system-initiated
+  // events (timeout, session-end). 'remote-adapter:<kind>' for client
+  // decisions; 'hub-stale-cleanup' for hub-driven cleanup; null/missing
+  // for system actions with no actor.
+  resolvedBy: z.string().nullable().optional(),
 });
 
 export const DownstreamMessageSchema = z.discriminatedUnion('type', [

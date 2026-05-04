@@ -3,6 +3,7 @@ import {
   ClientIdentifySchema, SubscribeSchema, InputActionSchema,
   UpstreamMessageSchema, DownstreamMessageSchema,
   SessionListSchema, ServerErrorSchema, PROTOCOL_VERSION,
+  SessionPromptRequestResolvedSchema,
 } from './protocol.js';
 
 describe('protocol upstream', () => {
@@ -30,5 +31,47 @@ describe('protocol downstream', () => {
   });
   it('server.error allows omitted message', () => {
     expect(ServerErrorSchema.parse({ type: 'server.error', code: 'bad-frame' })).toBeTruthy();
+  });
+});
+
+describe('SessionPromptRequestResolvedSchema additions', () => {
+  const base = {
+    type: 'session.prompt-request.resolved' as const,
+    sessionId: 's', requestId: 'r',
+  };
+
+  it('accepts resolvedBy as remote-adapter:<kind>', () => {
+    const r = SessionPromptRequestResolvedSchema.parse({
+      ...base, reason: 'decided', resolvedBy: 'remote-adapter:debug-web',
+    });
+    expect(r.resolvedBy).toBe('remote-adapter:debug-web');
+  });
+
+  it('accepts resolvedBy as hub-stale-cleanup', () => {
+    const r = SessionPromptRequestResolvedSchema.parse({
+      ...base, reason: 'cancelled-tool-completed', resolvedBy: 'hub-stale-cleanup',
+    });
+    expect(r.resolvedBy).toBe('hub-stale-cleanup');
+  });
+
+  it('accepts resolvedBy as null', () => {
+    const r = SessionPromptRequestResolvedSchema.parse({
+      ...base, reason: 'timeout', resolvedBy: null,
+    });
+    expect(r.resolvedBy).toBeNull();
+  });
+
+  it('accepts resolvedBy missing (backwards compat)', () => {
+    const r = SessionPromptRequestResolvedSchema.parse({
+      ...base, reason: 'session-ended',
+    });
+    expect(r.resolvedBy).toBeUndefined();
+  });
+
+  it('accepts cancelled-tool-completed as a reason value', () => {
+    const r = SessionPromptRequestResolvedSchema.parse({
+      ...base, reason: 'cancelled-tool-completed',
+    });
+    expect(r.reason).toBe('cancelled-tool-completed');
   });
 });
