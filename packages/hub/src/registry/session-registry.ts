@@ -26,6 +26,7 @@ export interface RegistryEvents {
   'session-removed': (id: string) => void;
   'state-changed':   (s: SessionInfo) => void;
   'substate-changed':(s: SessionInfo) => void;
+  'config-changed':  (s: SessionInfo) => void;
 }
 
 export interface SessionRecord extends SessionInfo {
@@ -166,7 +167,9 @@ export class SessionRegistry extends EventEmitter {
   setSessionGateOverride(id: string, p: 'disabled' | 'auto' | 'always'): boolean {
     const s = this.sessions.get(id);
     if (!s) return false;
+    if (s.sessionGateOverride === p) return true;
     s.sessionGateOverride = p;
+    this.emit('config-changed', this.publicView(s));
     return true;
   }
 
@@ -177,7 +180,9 @@ export class SessionRegistry extends EventEmitter {
   setPin(id: string, msg: string | null): boolean {
     const s = this.sessions.get(id);
     if (!s) return false;
+    if (s.pin === msg) return true;
     s.pin = msg;
+    this.emit('config-changed', this.publicView(s));
     return true;
   }
 
@@ -188,7 +193,9 @@ export class SessionRegistry extends EventEmitter {
   setQuietUntil(id: string, ts: number | null): boolean {
     const s = this.sessions.get(id);
     if (!s) return false;
+    if (s.quietUntil === ts) return true;
     s.quietUntil = ts;
+    this.emit('config-changed', this.publicView(s));
     return true;
   }
 
@@ -214,7 +221,6 @@ export class SessionRegistry extends EventEmitter {
       // Stripped fields (private to the hub):
       fileTailCursor: _c, lastHeartbeat: _h,
       claudeAllowRules: _a, sessionAllowList: _l,
-      sessionGateOverride: _g, pin: _p, quietUntil: _q,
       usesPermissionRequest: _u,
       // Surfaced fields stay in `pub`:
       sessionFilePath,

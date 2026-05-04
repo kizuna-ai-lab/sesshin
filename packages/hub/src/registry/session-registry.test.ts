@@ -147,17 +147,109 @@ describe('SessionRegistry — publicView surfaces sessionFilePath', () => {
     r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/p.jsonl' });
     expect(captured.sessionFilePath).toBe('/p.jsonl');
   });
-  it('publicView does NOT leak claudeAllowRules / pin / sessionAllowList / etc.', () => {
+  it('publicView does NOT leak claudeAllowRules / sessionAllowList / usesPermissionRequest / etc.', () => {
     const r = makeReg();
     r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/p.jsonl' });
     const view = r.list()[0] as Record<string, unknown>;
     expect('claudeAllowRules' in view).toBe(false);
     expect('sessionAllowList' in view).toBe(false);
-    expect('pin' in view).toBe(false);
-    expect('quietUntil' in view).toBe(false);
-    expect('sessionGateOverride' in view).toBe(false);
     expect('usesPermissionRequest' in view).toBe(false);
     expect('lastHeartbeat' in view).toBe(false);
     expect('fileTailCursor' in view).toBe(false);
+    // pin, quietUntil, sessionGateOverride are now surfaced in publicView:
+    expect('pin' in view).toBe(true);
+    expect('quietUntil' in view).toBe(true);
+    expect('sessionGateOverride' in view).toBe(true);
+  });
+});
+
+describe('publicView and config-changed event', () => {
+  function fixtureRegistry(): SessionRegistry {
+    const r = new SessionRegistry();
+    r.register({
+      id: 's1', name: 'n', agent: 'claude-code', cwd: '/x', pid: 1, sessionFilePath: '/x/s1.jsonl'
+    });
+    return r;
+  }
+
+  it('publicView includes pin/quietUntil/sessionGateOverride after register', () => {
+    const r = fixtureRegistry();
+    const s = r.list()[0]!;
+    expect(s.pin).toBeNull();
+    expect(s.quietUntil).toBeNull();
+    expect(s.sessionGateOverride).toBeNull();
+  });
+
+  it('setPin emits config-changed with the new pin in the snapshot', () => {
+    const r = fixtureRegistry();
+    const id = r.list()[0]!.id;
+    const events: any[] = [];
+    r.on('config-changed', (info) => events.push(info));
+    r.setPin(id, 'deploy');
+    expect(events).toHaveLength(1);
+    expect(events[0]!.pin).toBe('deploy');
+    expect(events[0]!.quietUntil).toBeNull();
+    expect(events[0]!.sessionGateOverride).toBeNull();
+  });
+
+  it('setPin to the same value does not emit', () => {
+    const r = fixtureRegistry();
+    const id = r.list()[0]!.id;
+    r.setPin(id, 'x');
+    const events: any[] = [];
+    r.on('config-changed', (info) => events.push(info));
+    r.setPin(id, 'x');
+    expect(events).toHaveLength(0);
+  });
+
+  it('setPin null→null does not emit', () => {
+    const r = fixtureRegistry();
+    const id = r.list()[0]!.id;
+    const events: any[] = [];
+    r.on('config-changed', (info) => events.push(info));
+    r.setPin(id, null);
+    expect(events).toHaveLength(0);
+  });
+
+  it('setQuietUntil emits + no-op short-circuit', () => {
+    const r = fixtureRegistry();
+    const id = r.list()[0]!.id;
+    const events: any[] = [];
+    r.on('config-changed', (info) => events.push(info));
+    r.setQuietUntil(id, 1700000000000);
+    r.setQuietUntil(id, 1700000000000);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.quietUntil).toBe(1700000000000);
+  });
+
+  it('setSessionGateOverride emits + no-op short-circuit', () => {
+    const r = fixtureRegistry();
+    const id = r.list()[0]!.id;
+    const events: any[] = [];
+    r.on('config-changed', (info) => events.push(info));
+    r.setSessionGateOverride(id, 'always');
+    r.setSessionGateOverride(id, 'always');
+    expect(events).toHaveLength(1);
+    expect(events[0]!.sessionGateOverride).toBe('always');
+  });
+
+  it('config-changed payload does not contain stripped private fields', () => {
+    const r = fixtureRegistry();
+    const id = r.list()[0]!.id;
+    let captured: any = null;
+    r.on('config-changed', (info) => { captured = info; });
+    r.setPin(id, 'x');
+    expect(captured).not.toBeNull();
+    expect('claudeAllowRules' in captured).toBe(false);
+    expect('sessionAllowList' in captured).toBe(false);
+    expect('usesPermissionRequest' in captured).toBe(false);
+  });
+
+  it('setPin on unknown session returns false and does not emit', () => {
+    const r = new SessionRegistry();
+    const events: any[] = [];
+    r.on('config-changed', (info) => events.push(info));
+    expect(r.setPin('nonexistent', 'x')).toBe(false);
+    expect(events).toHaveLength(0);
   });
 });
