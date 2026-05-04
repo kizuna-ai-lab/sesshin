@@ -39,6 +39,21 @@ export function upsertSession(s: SessionInfo): void {
 }
 export function removeSession(id: string): void { sessions.value = sessions.value.filter((s) => s.id !== id); }
 
+export function applyConfigChanged(sessionId: string, config: {
+  pin: string | null;
+  quietUntil: number | null;
+  sessionGateOverride: 'disabled' | 'auto' | 'always' | null;
+}): void {
+  const cur = sessions.value.find((s) => s.id === sessionId);
+  if (!cur) return;
+  upsertSession({
+    ...cur,
+    pin: config.pin,
+    quietUntil: config.quietUntil,
+    sessionGateOverride: config.sessionGateOverride,
+  });
+}
+
 export function addSummary(s: Summary & { sessionId: string }): void {
   const cur = summariesBySession.value[s.sessionId] ?? [];
   summariesBySession.value = { ...summariesBySession.value, [s.sessionId]: [s as any, ...cur].slice(0, 50) };

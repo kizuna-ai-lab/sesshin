@@ -3,6 +3,7 @@ import {
   connected, sessions, upsertSession, removeSession,
   addSummary, addEvent, appendRaw, lastEventId,
   addPromptRequest, removePromptRequest,
+  applyConfigChanged,
 } from './store.js';
 import type { Action, PromptResponseAnswer } from '@sesshin/shared';
 
@@ -68,6 +69,12 @@ function handleFrame(m: any): void {
       }); return;
     case 'session.prompt-request.resolved':
       removePromptRequest(m.sessionId, m.requestId); return;
+    case 'session.config-changed':
+      applyConfigChanged(m.sessionId, {
+        pin: m.pin,
+        quietUntil: m.quietUntil,
+        sessionGateOverride: m.sessionGateOverride,
+      }); return;
     // attention is accepted but not rendered yet (T64).
   }
 }
