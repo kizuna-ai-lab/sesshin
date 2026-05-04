@@ -296,4 +296,35 @@ describe('subscribe-time replay of pending prompt-requests', () => {
     expect(frames.find((f) => f.type === 'session.prompt-request')).toBeUndefined();
     client.close();
   });
+
+  it('replay frame is structurally identical to the original live broadcast', async () => {
+    const sid = registerSession();
+
+    // Open approval first — will be replayed to subscribers.
+    approvals.open({
+      sessionId: sid, tool: 'Bash', toolInput: { command: 'rm -rf /' },
+      origin: 'permission', body: 'cmd: rm -rf /', questions: makeQuestions(),
+      toolUseId: 'tu_xyz',
+    });
+
+    // Subscribe client A early — receives the REPLAY.
+    const clientA = await connectClient(['actions','state']);
+    const framesA = collectFrames(clientA);
+    clientA.send(JSON.stringify({ type: 'subscribe', sessions: [sid], since: null }));
+    await waitFor(() => framesA.some((f) => f.type === 'session.prompt-request'));
+    const frameA = framesA.find((f) => f.type === 'session.prompt-request');
+
+    // Subscribe client B late — also receives a REPLAY of the same approval.
+    const clientB = await connectClient(['actions','state']);
+    const framesB = collectFrames(clientB);
+    clientB.send(JSON.stringify({ type: 'subscribe', sessions: [sid], since: null }));
+    await waitFor(() => framesB.some((f) => f.type === 'session.prompt-request'));
+    const frameB = framesB.find((f) => f.type === 'session.prompt-request');
+
+    // Deep-equal: the contract is "all replay frames are structurally identical regardless of when client subscribes".
+    expect(frameB).toEqual(frameA);
+
+    clientA.close();
+    clientB.close();
+  });
 });
