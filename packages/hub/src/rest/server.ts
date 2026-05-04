@@ -191,6 +191,10 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
   const m = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
   if (m) {
     const id = m[1]!;
+    if (method === 'GET') {
+      if (!deps.registry.get(id)) return void res.writeHead(404).end();
+      return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ id }));
+    }
     if (method === 'DELETE') return unregisterSession(id, res, deps);
     return void res.writeHead(405).end();
   }

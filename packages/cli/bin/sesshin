@@ -1,2 +1,6 @@
 #!/usr/bin/env node
-import('../dist/main.js');
+const { main } = await import('../dist/main.js');
+main().then((code) => { if (code !== null) process.exit(code); }).catch((e) => {
+  process.stderr.write(`fatal: ${e?.stack ?? e}\n`);
+  process.exit(1);
+});
