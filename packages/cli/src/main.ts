@@ -10,7 +10,7 @@ import { runPin } from './subcommands/pin.js';
 import { runQuiet } from './subcommands/quiet.js';
 import { runLog } from './subcommands/log.js';
 
-async function main(): Promise<number | null> {
+export async function main(): Promise<number | null> {
   const [cmd, ...rest] = process.argv.slice(2);
   switch (cmd) {
     case 'claude':
@@ -86,10 +86,12 @@ async function main(): Promise<number | null> {
   }
 }
 
-function pickFlag(args: readonly string[], name: string): string | undefined {
+export function pickFlag(args: readonly string[], name: string): string | undefined {
   const i = args.indexOf(name);
   if (i === -1) return undefined;
-  return args[i + 1];
+  const v = args[i + 1];
+  if (v === undefined || v === '' || v.startsWith('--')) return undefined;
+  return v;
 }
 
 function stripFlagPair(args: readonly string[], name: string): string[] {
