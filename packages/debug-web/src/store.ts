@@ -37,15 +37,24 @@ export function upsertSession(s: SessionInfo): void {
     ? existing.map((x, i) => (i === idx ? s : x))
     : [...existing, s];
 }
+function deleteSessionKey<T>(
+  store: ReturnType<typeof signal<Record<string, T>>>,
+  id: string,
+): void {
+  if (!(id in store.value)) return;
+  const next = { ...store.value };
+  delete next[id];
+  store.value = next;
+}
+
 export function removeSession(id: string): void {
   sessions.value = sessions.value.filter((s) => s.id !== id);
-  // also clear any pending prompt-cards for this session.
-  // Prevents stale cards lingering after the agent exits / unregisters.
-  if (id in promptRequestsBySession.value) {
-    const next = { ...promptRequestsBySession.value };
-    delete next[id];
-    promptRequestsBySession.value = next;
-  }
+  // Clear session data from all keyed maps.
+  // Prevents stale entries lingering after the agent exits / unregisters.
+  deleteSessionKey(summariesBySession, id);
+  deleteSessionKey(eventsBySession, id);
+  deleteSessionKey(rawBySession, id);
+  deleteSessionKey(promptRequestsBySession, id);
 }
 
 export function applyConfigChanged(sessionId: string, config: {
