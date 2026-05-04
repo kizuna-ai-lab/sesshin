@@ -178,16 +178,30 @@ export const SessionPromptRequestResolvedSchema = z.object({
   resolvedBy: z.string().nullable().optional(),
 });
 
+// Server tells subscribers a session's user-set sticky configuration
+// changed (pin / quietUntil / sessionGateOverride). Carries the full
+// snapshot of all three rather than a delta — keeps client merge logic
+// trivial. Gated on `state` capability.
+export const SessionConfigChangedSchema = z.object({
+  type:                z.literal('session.config-changed'),
+  sessionId:           z.string(),
+  pin:                 z.string().nullable(),
+  quietUntil:          z.number().int().nullable(),
+  sessionGateOverride: z.enum(['disabled','auto','always']).nullable(),
+});
+
 export const DownstreamMessageSchema = z.discriminatedUnion('type', [
   ServerHelloSchema, SessionListSchema, SessionAddedSchema, SessionRemovedSchema,
   SessionStateMsgSchema, SessionEventMsgSchema, SessionSummaryMsgSchema,
   SessionAttentionSchema, SessionRawSchema, ServerErrorSchema, ServerPingSchema,
   SessionPromptRequestSchema, SessionPromptRequestResolvedSchema,
+  SessionConfigChangedSchema,
 ]);
 export type DownstreamMessage = z.infer<typeof DownstreamMessageSchema>;
 
 export type SessionPromptRequest         = z.infer<typeof SessionPromptRequestSchema>;
 export type SessionPromptRequestResolved = z.infer<typeof SessionPromptRequestResolvedSchema>;
+export type SessionConfigChanged         = z.infer<typeof SessionConfigChangedSchema>;
 export type PromptResponse               = z.infer<typeof PromptResponseSchema>;
 export type PromptResponseAnswer         = z.infer<typeof PromptResponseSchema>['answers'][number];
 export type PromptQuestion               = z.infer<typeof PromptQuestionSchema>;
