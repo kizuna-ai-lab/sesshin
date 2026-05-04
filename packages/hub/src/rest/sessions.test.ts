@@ -60,6 +60,24 @@ describe('/api/sessions', () => {
   });
 });
 
+describe('GET /api/sessions/:id', () => {
+  it('returns 200 + { id } when session is registered', async () => {
+    registry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const r = await fetch(`http://127.0.0.1:${port}/api/sessions/s1`);
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ id: 's1' });
+  });
+  it('returns 404 when session is unknown', async () => {
+    const r = await fetch(`http://127.0.0.1:${port}/api/sessions/missing`);
+    expect(r.status).toBe(404);
+  });
+  it('still returns 405 for unsupported methods (e.g. PUT)', async () => {
+    registry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const r = await fetch(`http://127.0.0.1:${port}/api/sessions/s1`, { method: 'PUT' });
+    expect(r.status).toBe(405);
+  });
+});
+
 describe('heartbeat', () => {
   it('POST /api/sessions/:id/heartbeat updates lastHeartbeat', async () => {
     const before = Date.now();
