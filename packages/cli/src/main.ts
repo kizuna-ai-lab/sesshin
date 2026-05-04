@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+import { realpathSync } from 'node:fs';
 import { runClaude } from './claude.js';
 import { runStatus } from './subcommands/status.js';
 import { runClients } from './subcommands/clients.js';
@@ -99,7 +101,19 @@ function stripFlagPair(args: readonly string[], name: string): string[] {
   return i === -1 ? [...args] : [...args.slice(0, i), ...args.slice(i + 2)];
 }
 
-main().then((code) => { if (code !== null) process.exit(code); }).catch((e) => {
-  process.stderr.write(`fatal: ${e?.stack ?? e}\n`);
-  process.exit(1);
-});
+function isMainModule(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return fileURLToPath(import.meta.url) === realpathSync(entry);
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
+  main().then((code) => { if (code !== null) process.exit(code); }).catch((e) => {
+    process.stderr.write(`fatal: ${e?.stack ?? e}\n`);
+    process.exit(1);
+  });
+}
