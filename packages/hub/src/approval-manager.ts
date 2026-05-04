@@ -1,8 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { fingerprintToolInput } from '@sesshin/shared';
+import type { PromptQuestion } from '@sesshin/shared';
 
 export type Decision = 'allow' | 'deny' | 'ask';
 export interface ApprovalOutcome { decision: Decision; reason?: string }
+
+export type PromptOrigin =
+  'permission' | 'ask-user-question' | 'exit-plan-mode' | 'enter-plan-mode';
 
 export interface PendingApproval {
   requestId: string;
@@ -13,6 +17,10 @@ export interface PendingApproval {
   toolUseId?: string;
   createdAt: number;
   expiresAt: number;
+  // Captured at open() so subscribe-replay rebuilds the original wire frame:
+  origin: PromptOrigin;
+  body?: string;
+  questions: PromptQuestion[];
 }
 
 interface Entry extends PendingApproval {
@@ -70,6 +78,10 @@ export class ApprovalManager {
     toolUseId?: string;
     timeoutMs?: number;
     onExpire?: (a: PendingApproval) => void;
+    // NEW:
+    origin: PromptOrigin;
+    body?: string;
+    questions: PromptQuestion[];
   }): { request: PendingApproval; decision: Promise<ApprovalOutcome> } {
     const requestId = randomUUID();
     const timeoutMs = input.timeoutMs ?? this.opts.defaultTimeoutMs;
@@ -86,6 +98,9 @@ export class ApprovalManager {
       toolInputFingerprint,
       ...(input.toolUseId !== undefined ? { toolUseId: input.toolUseId } : {}),
       createdAt, expiresAt,
+      origin: input.origin,
+      ...(input.body !== undefined ? { body: input.body } : {}),
+      questions: input.questions,
     };
     const decision = new Promise<ApprovalOutcome>((resolve) => {
       const onExpire = input.onExpire ?? (() => undefined);
@@ -212,7 +227,16 @@ export class ApprovalManager {
     const out: PendingApproval[] = [];
     for (const e of this.pending.values()) {
       if (e.sessionId !== sessionId) continue;
-      out.push({ requestId: e.requestId, sessionId: e.sessionId, tool: e.tool, toolInput: e.toolInput, toolInputFingerprint: e.toolInputFingerprint, ...(e.toolUseId !== undefined ? { toolUseId: e.toolUseId } : {}), createdAt: e.createdAt, expiresAt: e.expiresAt });
+      out.push({
+        requestId: e.requestId, sessionId: e.sessionId,
+        tool: e.tool, toolInput: e.toolInput,
+        toolInputFingerprint: e.toolInputFingerprint,
+        ...(e.toolUseId !== undefined ? { toolUseId: e.toolUseId } : {}),
+        createdAt: e.createdAt, expiresAt: e.expiresAt,
+        origin: e.origin,
+        ...(e.body !== undefined ? { body: e.body } : {}),
+        questions: e.questions,
+      });
     }
     return out;
   }

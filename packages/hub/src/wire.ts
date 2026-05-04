@@ -254,6 +254,10 @@ export async function startHub(): Promise<HubInstance> {
             sessionId: a.sessionId, requestId: a.requestId, reason: 'timeout',
           });
         },
+        // NEW:
+        origin: rendered.origin ?? 'permission',
+        ...(rendered.body !== undefined ? { body: rendered.body } : {}),
+        questions: rendered.questions,
       });
 
       registry.updateState(env.sessionId, 'awaiting-confirmation');
@@ -326,6 +330,10 @@ export async function startHub(): Promise<HubInstance> {
             sessionId: a.sessionId, requestId: a.requestId, reason: 'timeout',
           });
         },
+        // NEW:
+        origin: rendered.origin ?? 'permission',
+        ...(rendered.body !== undefined ? { body: rendered.body } : {}),
+        questions: rendered.questions,
       });
 
       registry.updateState(env.sessionId, 'awaiting-confirmation');
