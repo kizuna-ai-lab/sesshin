@@ -316,4 +316,72 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
     const r = await reqPromise;
     expect(r.status).toBe(200);
   });
+
+  it('timeout (PermissionRequest) → resolvedBy = null', async () => {
+    // Tear down the fixture-default 1000ms hub.
+    await rest.close();
+    await ws.close();
+
+    // Rebuild with a fast 30ms approval timeout so onExpire fires quickly.
+    registry  = new SessionRegistry();
+    approvals = new ApprovalManager({ defaultTimeoutMs: 30 });
+    let wsRef: WsServerInstance | undefined;
+    const adapters = createApprovalAdapters({
+      registry, approvals,
+      approvalGate: parsePolicy('always'),
+      getWs: () => wsRef,
+    });
+    rest = createRestServer({ registry, approvals, ...adapters.restDeps });
+    ws   = createWsServer({
+      registry,
+      bus:        new EventBus(),
+      tap:        new PtyTap({ ringBytes: 1024 }),
+      staticDir:  null,
+      approvals,
+      onInput:    async () => ({ ok: true }),
+      ...adapters.wsDeps,
+    });
+    broadcasts = [];
+    const realBroadcast = ws.broadcast.bind(ws);
+    ws.broadcast = (msg: object, filter?: (caps: string[]) => boolean): void => {
+      broadcasts.push(msg);
+      realBroadcast(msg, filter);
+    };
+    wsRef = ws;
+    registry.on('session-removed', adapters.onSessionRemoved);
+    await rest.listen(0, '127.0.0.1');
+    await ws.listen(0, '127.0.0.1');
+    restPort = rest.address().port;
+    wsPort   = ws.address().port;
+
+    // ---- Drive the test ----
+    const sid = registerSession();
+
+    const reqPromise = fetch(`http://127.0.0.1:${restPort}/permission/${sid}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        session_id: 'claude-uuid', hook_event_name: 'PermissionRequest',
+        tool_name: 'Bash', tool_input: { command: 'ls' },
+        tool_use_id: 'tu_pr_timeout',
+      }),
+    });
+
+    await waitFor(() => approvals.pendingForSession(sid).length === 1);
+    const pending = approvals.pendingForSession(sid)[0]!;
+
+    await waitFor(
+      () => findResolvedFrame(pending.requestId) !== undefined,
+      /* timeoutMs */ 500,
+    );
+    const frame = findResolvedFrame(pending.requestId)!;
+    expect(frame.reason).toBe('timeout');
+    expect(frame.resolvedBy).toBeNull();
+    expect(frame.sessionId).toBe(sid);
+
+    const r = await reqPromise;
+    // Timeout resolves via 'ask' which onPermissionRequestApproval maps to null
+    // (passthrough → 204). Some configs surface as 200; allow either.
+    expect([200, 204]).toContain(r.status);
+  });
 });
