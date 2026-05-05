@@ -24,12 +24,10 @@ import { runModeB } from './summarizer/mode-b.js';
 import { wireSummarizerTrigger } from './summarizer-trigger.js';
 import { ApprovalManager } from './approval-manager.js';
 import type { ApprovalOutcome } from './approval-manager.js';
-import { parsePolicy, shouldGatePreToolUse } from './agents/claude/approval-policy.js';
 import { getHandler, setCatchAllToolName } from './agents/claude/tool-handlers/registry.js';
 import type { ToolHandler, HandlerCtx } from './agents/claude/tool-handlers/types.js';
 import type { PermissionUpdate } from '@sesshin/shared';
 import type { HistoryEntry } from './rest/diagnostics.js';
-import type { ApprovalGatePolicy } from './agents/claude/approval-policy.js';
 
 interface PendingHandlerSlot {
   handler:   ToolHandler;
@@ -41,7 +39,6 @@ interface PendingHandlerSlot {
 export interface ApprovalAdapters {
   restDeps: {
     onApprovalsCleanedUp:        NonNullable<RestServerDeps['onApprovalsCleanedUp']>;
-    onPreToolUseApproval:        NonNullable<RestServerDeps['onPreToolUseApproval']>;
     onPermissionRequestApproval: NonNullable<RestServerDeps['onPermissionRequestApproval']>;
     historyForSession:           NonNullable<RestServerDeps['historyForSession']>;
   };
@@ -61,10 +58,9 @@ export interface ApprovalAdapters {
 export function createApprovalAdapters(opts: {
   registry:     SessionRegistry;
   approvals:    ApprovalManager;
-  approvalGate: ApprovalGatePolicy;
   getWs:        () => WsServerInstance | undefined;
 }): ApprovalAdapters {
-  const { registry, approvals, approvalGate, getWs } = opts;
+  const { registry, approvals, getWs } = opts;
 
   // Per-request state — moved from module scope (was wire.ts:36–42).
   const pendingHandlers          = new Map<string, PendingHandlerSlot>();
@@ -103,9 +99,8 @@ export function createApprovalAdapters(opts: {
     (sessionId, requestIds) => {
       // The stale-cleanup path in rest/server.ts just resolved one or more
       // pending approvals because PostToolUse / Stop arrived for a tool whose
-      // approval was still open (typical scenario: PreToolUse timed out →
-      // sesshin returned ask → CC fired PermissionRequest → user picked in
-      // CC's TUI before answering on the remote → tool ran while sesshin's
+      // approval was still open (typical scenario: user picked in CC's TUI
+      // before answering on the remote → tool ran while sesshin's
       // PermissionRequest long-poll was still hanging). Clean up the per-
       // request maps and tell remote clients the prompt is no longer live so
       // the awaiting card disappears.
@@ -119,102 +114,6 @@ export function createApprovalAdapters(opts: {
           resolvedBy: 'hub-stale-cleanup',
         });
       }
-    };
-
-  const onPreToolUseApproval: ApprovalAdapters['restDeps']['onPreToolUseApproval'] =
-    async (env) => {
-      // Mode-aware gating: when claude wouldn't have prompted on its own
-      // (auto / acceptEdits / bypassPermissions / read-only tool), return
-      // null so the REST layer responds 204 and the hook handler stays
-      // silent. Claude then follows its normal mode logic and the user
-      // sees no extra prompts.
-      const session = registry.get(env.sessionId);
-      const knownMode = session?.substate.permissionMode;
-      // Per-session gate override (set via /sesshin-gate or POST /api/sessions/:id/gate)
-      // takes precedence over the env-level SESSHIN_APPROVAL_GATE policy.
-      const sessionPolicy = registry.getSessionGateOverride(env.sessionId);
-      const policyForCall = sessionPolicy ?? approvalGate;
-      // hasSubscribedClient: stay transparent when no actions-capable client
-      // is currently subscribed to this session. Hook handler returns 204 →
-      // claude follows its native permission logic instead of waiting on a
-      // ghost remote.
-      const hasSubscribedClient = getWs()?.hasSubscribedActionsClient(env.sessionId) ?? false;
-      // Once a PermissionRequest HTTP hook has been observed for this session,
-      // PreToolUse short-circuits: the real gate is somewhere else. Stops us
-      // from double-gating the same tool call.
-      const usesPR = registry.get(env.sessionId)?.usesPermissionRequest === true;
-      if (!shouldGatePreToolUse(env.raw, knownMode, policyForCall, {
-        sessionAllowList: session?.sessionAllowList ?? [],
-        claudeAllowRules: session?.claudeAllowRules ?? [],
-      }, hasSubscribedClient, usesPR)) return null;
-      const tool = typeof env.raw['tool_name'] === 'string' ? env.raw['tool_name'] : 'unknown';
-      const rawInput = env.raw['tool_input'];
-      const toolInput: Record<string, unknown> =
-        rawInput !== null && typeof rawInput === 'object'
-          ? (rawInput as Record<string, unknown>)
-          : {};
-      const toolUseId = typeof env.raw['tool_use_id'] === 'string' ? env.raw['tool_use_id'] : undefined;
-
-      setCatchAllToolName(tool);
-      const handler = getHandler(tool);
-      const ctx: HandlerCtx = {
-        permissionMode: knownMode ?? 'default',
-        cwd: session?.cwd ?? process.cwd(),
-        sessionAllowList: session?.sessionAllowList ?? [],
-      };
-      const rendered = handler.render(toolInput, ctx);
-
-      const { request, decision } = approvals.open({
-        sessionId: env.sessionId, tool, toolInput,
-        ...(toolUseId !== undefined ? { toolUseId } : {}),
-        onExpire: (a) => {
-          getWs()?.broadcast({
-            type: 'session.prompt-request.resolved',
-            sessionId: a.sessionId, requestId: a.requestId, reason: 'timeout',
-            resolvedBy: null,
-          });
-        },
-        origin: rendered.origin ?? 'permission',
-        ...(rendered.body !== undefined ? { body: rendered.body } : {}),
-        questions: rendered.questions,
-      });
-
-      registry.updateState(env.sessionId, 'awaiting-confirmation');
-      getWs()?.broadcast({
-        type: 'session.prompt-request',
-        sessionId: env.sessionId,
-        requestId: request.requestId,
-        origin: rendered.origin ?? 'permission',
-        toolName: tool,
-        ...(toolUseId !== undefined ? { toolUseId } : {}),
-        expiresAt: request.expiresAt,
-        ...(rendered.body !== undefined ? { body: rendered.body } : {}),
-        questions: rendered.questions,
-      });
-
-      pendingHandlers.set(request.requestId, { handler, ctx, toolInput, tool });
-
-      // Use try/finally so pendingHandlers + pendingUpdated{Input,Permissions}
-      // are always cleaned up — including the stale-cleanup, timeout, and
-      // session-end paths where the resolution doesn't come back through
-      // onPromptResponse. Without this, those paths leaked map slots
-      // indefinitely. PreToolUse's wire response doesn't carry
-      // updatedPermissions (that's PermissionRequest-only), but cleanup is
-      // still needed in case the same handler set both fields.
-      let out: ApprovalOutcome;
-      let ui: Record<string, unknown> | undefined;
-      try {
-        out = await decision;
-        // Whichever path ended the approval, restore the session to running so
-        // the laptop and remote can keep typing.
-        registry.updateState(env.sessionId, 'running');
-        ui = pendingUpdatedInput.get(request.requestId);
-      } finally {
-        pendingHandlers.delete(request.requestId);
-        pendingUpdatedInput.delete(request.requestId);
-        pendingUpdatedPermissions.delete(request.requestId);
-      }
-      return { ...out, ...(ui ? { updatedInput: ui } : {}) };
     };
 
   const onPermissionRequestApproval: ApprovalAdapters['restDeps']['onPermissionRequestApproval'] =
@@ -272,8 +171,10 @@ export function createApprovalAdapters(opts: {
 
       pendingHandlers.set(request.requestId, { handler, ctx, toolInput, tool });
 
-      // Mirror of the PreToolUse adapter's try/finally — guarantees cleanup
-      // on stale-cleanup / timeout / session-end paths too.
+      // try/finally guarantees cleanup of pendingHandlers +
+      // pendingUpdated{Input,Permissions} on every resolution path —
+      // decided, stale-cleanup, timeout, session-end, child-session
+      // boundary. Without this, those paths leaked map slots indefinitely.
       let out: ApprovalOutcome;
       let ui: Record<string, unknown> | undefined;
       let up: PermissionUpdate[] | undefined;
@@ -308,9 +209,9 @@ export function createApprovalAdapters(opts: {
   const onLastActionsClientGone: ApprovalAdapters['wsDeps']['onLastActionsClientGone'] =
     (sessionId) => {
       // The last actions-capable client just unsubscribed/disconnected. Any
-      // pending PreToolUse approval for this session is now waiting on a
-      // ghost. Resolve them as 'ask' immediately so claude's TUI prompt
-      // takes over instead of timing out 60s later.
+      // pending PermissionRequest approval for this session is now waiting
+      // on a ghost. Resolve them immediately so claude's TUI prompt takes
+      // over instead of timing out 60s later.
       const pending = approvals.pendingForSession(sessionId);
       if (pending.length === 0) return;
       // Clean up per-request maps + broadcast resolution BEFORE calling
@@ -423,7 +324,6 @@ export function createApprovalAdapters(opts: {
   return {
     restDeps: {
       onApprovalsCleanedUp,
-      onPreToolUseApproval,
       onPermissionRequestApproval,
       historyForSession: (sid, n) => historyStore.get(sid, n),
     },
@@ -628,21 +528,19 @@ export async function startHub(): Promise<HubInstance> {
   });
   for (const s of registry.list()) startTail(s.id);
 
-  // Remote approval flow (Path B): when a PreToolUse hook arrives we hold
-  // the hook handler's HTTP response until either a client posts a
-  // prompt-response over WS, or our internal timeout falls back to
-  // "ask" so claude's TUI prompt takes over on the laptop.
+  // Remote approval flow: when a PermissionRequest HTTP hook arrives we
+  // hold the hook handler's HTTP response until either a client posts a
+  // prompt-response over WS, or our internal timeout falls back so
+  // claude's TUI prompt takes over on the laptop.
   const approvals = new ApprovalManager({
     defaultTimeoutMs: Number(process.env['SESSHIN_APPROVAL_TIMEOUT_MS'] ?? 60_000),
   });
-  const approvalGate = parsePolicy(process.env['SESSHIN_APPROVAL_GATE']);
-  log.info({ approvalGate }, 'PreToolUse approval gate policy');
 
   // Forward declaration so adapters' getWs closure can reach the WS server,
   // which is constructed AFTER the REST server (matches today's wsRef pattern).
   let wsRef: WsServerInstance | undefined;
   const adapters = createApprovalAdapters({
-    registry, approvals, approvalGate, getWs: () => wsRef,
+    registry, approvals, getWs: () => wsRef,
   });
 
   // Phase B4: wrap the inner hook handler with boundary detection +

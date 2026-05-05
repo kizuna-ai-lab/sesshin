@@ -1,13 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import WebSocket from 'ws';
 import { createApprovalAdapters, createHookEventInterceptor } from './wire.js';
-import { createRestServer, type RestServer, type RestServerDeps } from './rest/server.js';
+import { createRestServer, type RestServer } from './rest/server.js';
 import { createWsServer, type WsServerInstance } from './ws/server.js';
 import { SessionRegistry } from './registry/session-registry.js';
 import { ApprovalManager } from './approval-manager.js';
 import { EventBus } from './event-bus.js';
 import { PtyTap } from './observers/pty-tap.js';
-import { parsePolicy } from './agents/claude/approval-policy.js';
 import { randomUUID } from 'node:crypto';
 
 // Tests in this file exercise wire.ts's broadcast wiring via the
@@ -25,7 +24,6 @@ let ws:   WsServerInstance;
 let restPort: number;
 let wsPort:   number;
 let broadcasts: object[];
-let onPreToolUseApproval: NonNullable<RestServerDeps['onPreToolUseApproval']> | undefined;
 
 beforeEach(async () => {
   registry  = new SessionRegistry();
@@ -35,12 +33,8 @@ beforeEach(async () => {
   let wsRef: WsServerInstance | undefined;
   const adapters = createApprovalAdapters({
     registry, approvals,
-    approvalGate: parsePolicy('always'),  // force gate ON regardless of mode
     getWs: () => wsRef,
   });
-
-  // Store the onPreToolUseApproval callback for use in tests.
-  onPreToolUseApproval = adapters.restDeps.onPreToolUseApproval;
 
   rest = createRestServer({ registry, approvals, ...adapters.restDeps });
   ws   = createWsServer({
@@ -147,7 +141,6 @@ async function rebuildWithFastTimeout(timeoutMs = 30): Promise<void> {
   let wsRef: WsServerInstance | undefined;
   const adapters = createApprovalAdapters({
     registry, approvals,
-    approvalGate: parsePolicy('always'),
     getWs: () => wsRef,
   });
   rest = createRestServer({ registry, approvals, ...adapters.restDeps });
@@ -182,7 +175,6 @@ describe('createApprovalAdapters — factory contract shape', () => {
     const adapters = createApprovalAdapters({
       registry: new SessionRegistry(),
       approvals: new ApprovalManager({ defaultTimeoutMs: 1000 }),
-      approvalGate: parsePolicy('always'),
       getWs: () => wsRef,
     });
 
@@ -190,7 +182,6 @@ describe('createApprovalAdapters — factory contract shape', () => {
       'historyForSession',
       'onApprovalsCleanedUp',
       'onPermissionRequestApproval',
-      'onPreToolUseApproval',
     ]);
     expect(Object.keys(adapters.wsDeps).sort()).toEqual([
       'onLastActionsClientGone',
@@ -210,19 +201,18 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
     // Give subscribe-time replay a beat to settle.
     await delay(50);
 
-    // Trigger an approval via onPreToolUseApproval, which will populate
-    // pendingHandlers and broadcast the session.prompt-request frame.
-    const decisionPromise = onPreToolUseApproval?.({
-      agent: 'claude-code',
-      sessionId: sid,
-      ts: Date.now(),
-      event: 'PreToolUse',
-      raw: {
-        tool_name: 'Bash',
-        tool_input: { command: 'ls' },
+    // Trigger an approval via the /permission/:sid HTTP route, which calls
+    // onPermissionRequestApproval, populates pendingHandlers, and broadcasts
+    // the session.prompt-request frame.
+    const decisionPromise = fetch(`http://127.0.0.1:${restPort}/permission/${sid}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        session_id: 'claude-uuid', hook_event_name: 'PermissionRequest',
+        tool_name: 'Bash', tool_input: { command: 'ls' },
         tool_use_id: randomUUID(),
-      },
-    }) ?? Promise.resolve(null);
+      }),
+    });
 
     // Give the approval request a beat to broadcast.
     await delay(50);
@@ -252,7 +242,7 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
 
     client.close();
 
-    // Wait for the decision promise to settle so the test completes cleanly.
+    // Drain the hanging request so the test completes cleanly.
     await decisionPromise;
   });
 
@@ -281,46 +271,6 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
     expect(frame.reason).toBe('cancelled-tool-completed');
     expect(frame.resolvedBy).toBe('hub-stale-cleanup');
     expect(frame.sessionId).toBe(sid);
-  });
-
-  it('timeout (PreToolUse) → resolvedBy = null', async () => {
-    await rebuildWithFastTimeout();
-
-    // ---- Now drive the test ----
-    const sid = registerSession();
-
-    // Don't await — the hook handler hangs until approval resolves
-    // (decided / timeout / etc). We're testing the timeout path, so it
-    // resolves via onExpire ~30ms later.
-    const reqPromise = fetch(`http://127.0.0.1:${restPort}/hooks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        agent: 'claude-code', sessionId: sid, ts: Date.now(), event: 'PreToolUse',
-        raw: {
-          nativeEvent: 'PreToolUse', tool_name: 'Bash',
-          tool_input: { command: 'ls' },
-        },
-      }),
-    });
-
-    // Wait for approvals.open to register a pending entry, then for the
-    // timeout broadcast to fire.
-    await waitFor(() => approvals.pendingForSession(sid).length === 1);
-    const pending = approvals.pendingForSession(sid)[0]!;
-
-    await waitFor(
-      () => findResolvedFrame(pending.requestId) !== undefined,
-      /* timeoutMs */ 500,
-    );
-    const frame = findResolvedFrame(pending.requestId)!;
-    expect(frame.reason).toBe('timeout');
-    expect(frame.resolvedBy).toBeNull();
-    expect(frame.sessionId).toBe(sid);
-
-    // Drain the hanging request — its body is the resulting decision.
-    const r = await reqPromise;
-    expect(r.status).toBe(200);
   });
 
   it('cancelled-no-clients → resolvedBy = null', async () => {
@@ -425,7 +375,7 @@ describe('child Claude session boundary (Phase B4)', () => {
     // anything from this freshly-derived set — we only borrow
     // onClaudeSessionBoundary.
     const adapters = createApprovalAdapters({
-      registry, approvals, approvalGate: parsePolicy('always'), getWs: () => ws,
+      registry, approvals, getWs: () => ws,
     });
     onHookEvent = createHookEventInterceptor({
       registry,

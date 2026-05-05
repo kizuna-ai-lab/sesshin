@@ -21,22 +21,6 @@ export interface RestServerDeps {
   /** Called when the CLI sink-stream connection closes (so the bridge can drop the sink). */
   onDetachSink?: (sessionId: string) => void;
   /**
-   * Called for PreToolUse hooks. Returning a decision blocks the hook
-   * handler until a client (or timeout) resolves it; the body is echoed
-   * verbatim to claude on stdout. Returning `null` means "passthrough" —
-   * the hub responds 204 so the hook handler stays silent and claude
-   * follows its normal mode-based logic. This is critical for auto /
-   * acceptEdits / bypassPermissions mode where forcing any decision
-   * (including "ask") would be a regression.
-   */
-  onPreToolUseApproval?: (envelope: {
-    agent: string; sessionId: string; ts: number; event: string; raw: Record<string, unknown>;
-  }) => Promise<{
-    decision: 'allow' | 'deny' | 'ask';
-    reason?: string;
-    updatedInput?: Record<string, unknown>;
-  } | null>;
-  /**
    * Called for PermissionRequest HTTP hooks (Claude Code's real approval gate).
    * Body shape is distinct from PreToolUse: returning a decision yields the
    * `behavior` shape (no `ask` — PermissionRequest has no equivalent).
@@ -347,49 +331,9 @@ async function ingestHook(req: IncomingMessage, res: ServerResponse, deps: RestS
       }
     }
   }
-  // PreToolUse can be intercepted to drive remote approval. We hold the
-  // response until a client decides (or the hub's internal timeout fires
-  // and falls back to "ask"). Claude is happy to wait — its default hook
-  // timeout is 600s. The client never sees this HTTP request directly; it
-  // sends its decision over the WS protocol instead.
-  if (parsed.data.event === 'PreToolUse' && deps.onPreToolUseApproval) {
-    let outcome: {
-      decision: 'allow' | 'deny' | 'ask';
-      reason?: string;
-      updatedInput?: Record<string, unknown>;
-    } | null;
-    try {
-      outcome = await deps.onPreToolUseApproval(parsed.data);
-    } catch {
-      // Errors fall back to "ask" so claude shows its TUI prompt — never
-      // silently allow on internal failure.
-      outcome = { decision: 'ask', reason: 'sesshin: approval flow errored — falling back' };
-    }
-    if (outcome === null) {
-      // Passthrough: hub explicitly chose not to gate this call (auto mode,
-      // read-only tool, etc.). Hook handler must emit no JSON so claude
-      // follows its normal mode logic.
-      res.writeHead(204).end();
-      return;
-    }
-    const out: {
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse';
-        permissionDecision: 'allow' | 'deny' | 'ask';
-        permissionDecisionReason?: string;
-        updatedInput?: Record<string, unknown>;
-      };
-    } = {
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: outcome.decision,
-        ...(outcome.reason !== undefined ? { permissionDecisionReason: outcome.reason } : {}),
-        ...(outcome.updatedInput !== undefined ? { updatedInput: outcome.updatedInput } : {}),
-      },
-    };
-    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(out));
-    return;
-  }
+  // PermissionRequest is the only approval gate; PreToolUse hook envelopes
+  // are still observed for state-machine substate updates (handled above
+  // via onHookEvent + the stale-cleanup path) but never gate.
   res.writeHead(204).end();
 }
 

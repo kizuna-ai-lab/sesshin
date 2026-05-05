@@ -186,9 +186,6 @@ short-circuiting the gate when an allow rule already covers the call.
 
 Environment variables:
 
-- `SESSHIN_APPROVAL_GATE` — `disabled` | `auto` (default) | `always`.
-  `disabled` skips remote gating entirely; `always` gates every tool
-  regardless of mode (useful for paranoid setups).
 - `SESSHIN_APPROVAL_TIMEOUT_MS` — hub-side timeout before a pending
   approval falls back to claude's TUI prompt. Default 60000.
 
