@@ -3,7 +3,7 @@ import {
   connected, sessions, upsertSession, removeSession,
   addSummary, addEvent, appendRaw, lastEventId,
   addPromptRequest, removePromptRequest,
-  applyConfigChanged,
+  applyConfigChanged, applyChildSessionChanged,
 } from './store.js';
 import type { Action, PromptResponseAnswer } from '@sesshin/shared';
 
@@ -75,6 +75,9 @@ function handleFrame(m: any): void {
         quietUntil: m.quietUntil,
         sessionGateOverride: m.sessionGateOverride,
       }); return;
+    case 'session.child-changed':
+      applyChildSessionChanged(m.sessionId, m.claudeSessionId);
+      return;
     // attention is accepted but not rendered yet (T64).
   }
 }

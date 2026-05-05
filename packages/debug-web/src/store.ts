@@ -72,6 +72,15 @@ export function applyConfigChanged(sessionId: string, config: {
   });
 }
 
+export function applyChildSessionChanged(sessionId: string, claudeSessionId: string | null): void {
+  const cur = sessions.value.find((s) => s.id === sessionId);
+  if (!cur) return;
+  upsertSession({
+    ...cur,
+    claudeSessionId,
+  });
+}
+
 export function addSummary(s: Summary & { sessionId: string }): void {
   const cur = summariesBySession.value[s.sessionId] ?? [];
   summariesBySession.value = { ...summariesBySession.value, [s.sessionId]: [s as any, ...cur].slice(0, 50) };
