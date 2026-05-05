@@ -31,7 +31,8 @@ describe('GET /api/diagnostics', () => {
     expect(j.sessions[0]).toMatchObject({
       id: 's1', state: 'starting',
       permissionMode: 'default',
-      sessionAllowList: [], claudeAllowRules: [],
+      claudeSessionId: null,
+      claudeAllowRules: [],
       pendingApprovals: 0,
     });
   });
@@ -56,27 +57,21 @@ describe('GET /api/diagnostics', () => {
     const j = await r.json();
     expect(j.sessions[0].pendingApprovals).toBe(1);
   });
-  it('exposes usesPermissionRequest=false for fresh session', async () => {
-    registry.register({ id: 's2', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
-    const j = await r.json();
-    const s = j.sessions.find((x: { id: string }) => x.id === 's2')!;
-    expect(s.usesPermissionRequest).toBe(false);
-  });
-  it('flips to true after registry.markUsesPermissionRequest', async () => {
-    registry.register({ id: 's3', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    registry.markUsesPermissionRequest('s3');
-    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
-    const j = await r.json();
-    const s = j.sessions.find((x: { id: string }) => x.id === 's3')!;
-    expect(s.usesPermissionRequest).toBe(true);
-  });
   it('exposes sessionFilePath when set', async () => {
     registry.register({ id: 's4', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/abs/path/to/transcript.jsonl' });
     const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
     const j = await r.json();
     const s = j.sessions.find((x: { id: string }) => x.id === 's4')!;
     expect(s.sessionFilePath).toBe('/abs/path/to/transcript.jsonl');
+  });
+
+  it('exposes claudeSessionId when set', async () => {
+    registry.register({ id: 's6', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    registry.setClaudeSessionId('s6', 'cc-123');
+    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const j = await r.json();
+    const s = j.sessions.find((x: { id: string }) => x.id === 's6')!;
+    expect(s.claudeSessionId).toBe('cc-123');
   });
   it('omits sessionFilePath when not set', async () => {
     registry.register({ id: 's5', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '' });
@@ -232,33 +227,6 @@ describe('GET /api/sessions/:id/history', () => {
 });
 
 describe('mutating session endpoints', () => {
-  it('POST /api/sessions/:id/trust adds the rule', async () => {
-    registry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    const r = await fetch(`http://127.0.0.1:${port}/api/sessions/s1/trust`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ruleString: 'Bash(git log:*)' }),
-    });
-    expect(r.status).toBe(204);
-    expect(registry.get('s1')?.sessionAllowList).toEqual(['Bash(git log:*)']);
-  });
-
-  it('POST /api/sessions/:id/trust 400 when ruleString missing', async () => {
-    registry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    const r = await fetch(`http://127.0.0.1:${port}/api/sessions/s1/trust`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    expect(r.status).toBe(400);
-  });
-
-  it('POST /api/sessions/:id/trust 404 when session unknown', async () => {
-    const r = await fetch(`http://127.0.0.1:${port}/api/sessions/nope/trust`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ruleString: 'Bash(ls:*)' }),
-    });
-    expect(r.status).toBe(404);
-  });
-
   it('POST /api/sessions/:id/gate sets the override', async () => {
     registry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
     const r = await fetch(`http://127.0.0.1:${port}/api/sessions/s1/gate`, {

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { catchAllHandler, setCatchAllToolName } from './catch-all.js';
 
-const ctx = { permissionMode: 'default' as const, cwd: '/x', sessionAllowList: [] };
+const ctx = { permissionMode: 'default' as const, cwd: '/x' };
 
 describe('catchAllHandler', () => {
   it('renders tool name + JSON-stringified input', () => {
@@ -11,7 +11,7 @@ describe('catchAllHandler', () => {
     const keys = out.questions[0]!.options.map(o => o.key);
     expect(keys).toEqual(['allow', 'allow-this-session:mcp__custom__doStuff', 'deny']);
   });
-  it('allow-this-session adds Tool(json) entry (tool name baked into the key)', () => {
+  it('allow-this-session emits addRules Tool(json) update (tool name baked into the key)', () => {
     setCatchAllToolName('mcp__custom__doStuff');
     const out = catchAllHandler.render({ k: 'v' }, ctx);
     // Find the allow-this-session option key (it carries the tool name)
@@ -24,7 +24,14 @@ describe('catchAllHandler', () => {
     );
     expect(d.kind).toBe('allow');
     if (d.kind === 'allow') {
-      expect(d.sessionAllowAdd).toBe('mcp__custom__doStuff({"k":"v"})');
+      expect(d.updatedPermissions).toEqual([
+        {
+          type: 'addRules',
+          behavior: 'allow',
+          destination: 'session',
+          rules: [{ toolName: 'mcp__custom__doStuff', ruleContent: '{"k":"v"}' }],
+        },
+      ]);
     }
   });
 
@@ -43,7 +50,14 @@ describe('catchAllHandler', () => {
     // Tool name comes from the key, not from LAST_TOOL_NAME — so server-A wins.
     expect(d.kind).toBe('allow');
     if (d.kind === 'allow') {
-      expect(d.sessionAllowAdd).toBe('mcp__server-A__do({"q":1})');
+      expect(d.updatedPermissions).toEqual([
+        {
+          type: 'addRules',
+          behavior: 'allow',
+          destination: 'session',
+          rules: [{ toolName: 'mcp__server-A__do', ruleContent: '{"q":1}' }],
+        },
+      ]);
     }
   });
 });

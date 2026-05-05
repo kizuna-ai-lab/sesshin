@@ -1,13 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import WebSocket from 'ws';
-import { createApprovalAdapters } from './wire.js';
-import { createRestServer, type RestServer, type RestServerDeps } from './rest/server.js';
+import { createApprovalAdapters, createHookEventInterceptor } from './wire.js';
+import { createRestServer, type RestServer } from './rest/server.js';
 import { createWsServer, type WsServerInstance } from './ws/server.js';
 import { SessionRegistry } from './registry/session-registry.js';
 import { ApprovalManager } from './approval-manager.js';
 import { EventBus } from './event-bus.js';
 import { PtyTap } from './observers/pty-tap.js';
-import { parsePolicy } from './agents/claude/approval-policy.js';
 import { randomUUID } from 'node:crypto';
 
 // Tests in this file exercise wire.ts's broadcast wiring via the
@@ -25,7 +24,6 @@ let ws:   WsServerInstance;
 let restPort: number;
 let wsPort:   number;
 let broadcasts: object[];
-let onPreToolUseApproval: NonNullable<RestServerDeps['onPreToolUseApproval']> | undefined;
 
 beforeEach(async () => {
   registry  = new SessionRegistry();
@@ -35,12 +33,8 @@ beforeEach(async () => {
   let wsRef: WsServerInstance | undefined;
   const adapters = createApprovalAdapters({
     registry, approvals,
-    approvalGate: parsePolicy('always'),  // force gate ON regardless of mode
     getWs: () => wsRef,
   });
-
-  // Store the onPreToolUseApproval callback for use in tests.
-  onPreToolUseApproval = adapters.restDeps.onPreToolUseApproval;
 
   rest = createRestServer({ registry, approvals, ...adapters.restDeps });
   ws   = createWsServer({
@@ -147,7 +141,6 @@ async function rebuildWithFastTimeout(timeoutMs = 30): Promise<void> {
   let wsRef: WsServerInstance | undefined;
   const adapters = createApprovalAdapters({
     registry, approvals,
-    approvalGate: parsePolicy('always'),
     getWs: () => wsRef,
   });
   rest = createRestServer({ registry, approvals, ...adapters.restDeps });
@@ -182,7 +175,6 @@ describe('createApprovalAdapters — factory contract shape', () => {
     const adapters = createApprovalAdapters({
       registry: new SessionRegistry(),
       approvals: new ApprovalManager({ defaultTimeoutMs: 1000 }),
-      approvalGate: parsePolicy('always'),
       getWs: () => wsRef,
     });
 
@@ -190,13 +182,13 @@ describe('createApprovalAdapters — factory contract shape', () => {
       'historyForSession',
       'onApprovalsCleanedUp',
       'onPermissionRequestApproval',
-      'onPreToolUseApproval',
     ]);
     expect(Object.keys(adapters.wsDeps).sort()).toEqual([
       'onLastActionsClientGone',
       'onPromptResponse',
     ]);
     expect(typeof adapters.onSessionRemoved).toBe('function');
+    expect(typeof adapters.onClaudeSessionBoundary).toBe('function');
   });
 });
 
@@ -209,19 +201,18 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
     // Give subscribe-time replay a beat to settle.
     await delay(50);
 
-    // Trigger an approval via onPreToolUseApproval, which will populate
-    // pendingHandlers and broadcast the session.prompt-request frame.
-    const decisionPromise = onPreToolUseApproval?.({
-      agent: 'claude-code',
-      sessionId: sid,
-      ts: Date.now(),
-      event: 'PreToolUse',
-      raw: {
-        tool_name: 'Bash',
-        tool_input: { command: 'ls' },
+    // Trigger an approval via the /permission/:sid HTTP route, which calls
+    // onPermissionRequestApproval, populates pendingHandlers, and broadcasts
+    // the session.prompt-request frame.
+    const decisionPromise = fetch(`http://127.0.0.1:${restPort}/permission/${sid}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        session_id: 'claude-uuid', hook_event_name: 'PermissionRequest',
+        tool_name: 'Bash', tool_input: { command: 'ls' },
         tool_use_id: randomUUID(),
-      },
-    }) ?? Promise.resolve(null);
+      }),
+    });
 
     // Give the approval request a beat to broadcast.
     await delay(50);
@@ -251,7 +242,7 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
 
     client.close();
 
-    // Wait for the decision promise to settle so the test completes cleanly.
+    // Drain the hanging request so the test completes cleanly.
     await decisionPromise;
   });
 
@@ -280,46 +271,6 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
     expect(frame.reason).toBe('cancelled-tool-completed');
     expect(frame.resolvedBy).toBe('hub-stale-cleanup');
     expect(frame.sessionId).toBe(sid);
-  });
-
-  it('timeout (PreToolUse) → resolvedBy = null', async () => {
-    await rebuildWithFastTimeout();
-
-    // ---- Now drive the test ----
-    const sid = registerSession();
-
-    // Don't await — the hook handler hangs until approval resolves
-    // (decided / timeout / etc). We're testing the timeout path, so it
-    // resolves via onExpire ~30ms later.
-    const reqPromise = fetch(`http://127.0.0.1:${restPort}/hooks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        agent: 'claude-code', sessionId: sid, ts: Date.now(), event: 'PreToolUse',
-        raw: {
-          nativeEvent: 'PreToolUse', tool_name: 'Bash',
-          tool_input: { command: 'ls' },
-        },
-      }),
-    });
-
-    // Wait for approvals.open to register a pending entry, then for the
-    // timeout broadcast to fire.
-    await waitFor(() => approvals.pendingForSession(sid).length === 1);
-    const pending = approvals.pendingForSession(sid)[0]!;
-
-    await waitFor(
-      () => findResolvedFrame(pending.requestId) !== undefined,
-      /* timeoutMs */ 500,
-    );
-    const frame = findResolvedFrame(pending.requestId)!;
-    expect(frame.reason).toBe('timeout');
-    expect(frame.resolvedBy).toBeNull();
-    expect(frame.sessionId).toBe(sid);
-
-    // Drain the hanging request — its body is the resulting decision.
-    const r = await reqPromise;
-    expect(r.status).toBe(200);
   });
 
   it('cancelled-no-clients → resolvedBy = null', async () => {
@@ -394,5 +345,218 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
     expect(frame.reason).toBe('session-ended');
     expect(frame.resolvedBy).toBeNull();
     expect(frame.sessionId).toBe(sid);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Phase B4: child Claude session boundary tests.
+//
+// These tests exercise createHookEventInterceptor — the wrapper around the
+// wireHookIngest output that startHub uses in production. We don't need a
+// real wireHookIngest here; we pass a stub `inner` to verify it is always
+// called after boundary handling.
+//
+// Setup mirrors the createApprovalAdapters scaffold above so the same
+// `broadcasts` capture works for both child-changed events (broadcast
+// directly from the interceptor) and prompt-request.resolved events
+// (broadcast via adapters.onClaudeSessionBoundary).
+// -----------------------------------------------------------------------------
+
+describe('child Claude session boundary (Phase B4)', () => {
+  let innerCalls: object[];
+  let onHookEvent: (env: { agent: string; sessionId: string; ts: number; event: string; raw: Record<string, unknown> }) => void;
+
+  beforeEach(() => {
+    innerCalls = [];
+    // Re-derive adapters against the outer beforeEach's registry/approvals/ws
+    // so we exercise the exact production cancel + broadcast shape rather
+    // than reimplementing it in the test. The outer beforeEach already
+    // installed adapters.onSessionRemoved on registry; we don't reinstall
+    // anything from this freshly-derived set — we only borrow
+    // onClaudeSessionBoundary.
+    const adapters = createApprovalAdapters({
+      registry, approvals, getWs: () => ws,
+    });
+    onHookEvent = createHookEventInterceptor({
+      registry,
+      getWs: () => ws,
+      onClaudeSessionBoundary: adapters.onClaudeSessionBoundary,
+      // No onTranscriptPathChanged in tests — we don't tail any files.
+      inner: (env) => { innerCalls.push(env); },
+    });
+  });
+
+  it('first SessionStart sets claudeSessionId from raw.session_id', () => {
+    const sid = registerSession();
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 1, event: 'SessionStart',
+      raw: { session_id: 'cc-1', source: 'startup', transcript_path: '/tmp/cc-1.jsonl' },
+    });
+    expect(registry.get(sid)?.claudeSessionId).toBe('cc-1');
+    // child-changed broadcast fired
+    const ev = broadcasts.find((b) => (b as any).type === 'session.child-changed');
+    expect(ev).toMatchObject({
+      sessionId: sid, previousClaudeSessionId: null,
+      claudeSessionId: 'cc-1', reason: 'startup',
+    });
+    // inner handler was still called
+    expect(innerCalls.length).toBe(1);
+  });
+
+  it('same raw.session_id on subsequent SessionStart does NOT broadcast child-changed', () => {
+    const sid = registerSession();
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 1, event: 'SessionStart',
+      raw: { session_id: 'cc-1', source: 'startup' },
+    });
+    const before = broadcasts.length;
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 2, event: 'SessionStart',
+      raw: { session_id: 'cc-1', source: 'compact' },
+    });
+    expect(
+      broadcasts.slice(before).find((b) => (b as any).type === 'session.child-changed'),
+    ).toBeUndefined();
+  });
+
+  it('different raw.session_id triggers child-changed and resets child-scoped state', () => {
+    const sid = registerSession();
+    // Prime with cc-1.
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 1, event: 'SessionStart',
+      raw: { session_id: 'cc-1', source: 'startup' },
+    });
+    // Dirty child-scoped state.
+    registry.setFileCursor(sid, 500);
+    registry.setLastSummary(sid, 'sum-1');
+    expect(registry.get(sid)?.fileTailCursor).toBe(500);
+    expect(registry.get(sid)?.lastSummaryId).toBe('sum-1');
+
+    const before = broadcasts.length;
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 2, event: 'SessionStart',
+      raw: { session_id: 'cc-2', source: 'clear' },
+    });
+    expect(registry.get(sid)?.claudeSessionId).toBe('cc-2');
+    expect(registry.get(sid)?.fileTailCursor).toBe(0);
+    expect(registry.get(sid)?.lastSummaryId).toBeNull();
+    const ev = broadcasts.slice(before).find((b) => (b as any).type === 'session.child-changed');
+    expect(ev).toMatchObject({
+      sessionId: sid, previousClaudeSessionId: 'cc-1',
+      claudeSessionId: 'cc-2', reason: 'clear',
+    });
+  });
+
+  it.each([
+    ['startup', 'startup'],
+    ['clear',   'clear'],
+    ['resume',  'resume'],
+    ['compact', 'unknown'],   // unrecognized here (boundary should rarely fire on compact, but defensive)
+    [undefined, 'unknown'],   // missing source
+    ['nonsense','unknown'],   // unrecognized
+  ])('reason mapping: raw.source=%j → reason=%s', (source, expected) => {
+    const sid = registerSession();
+    // Each sub-case needs a fresh registry record so the boundary fires.
+    // Use a unique outgoing claude id so the equality check sees a change.
+    const newCcId = `cc-${expected}-${Math.random()}`;
+    const raw: Record<string, unknown> = { session_id: newCcId };
+    if (source !== undefined) raw['source'] = source;
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 1, event: 'SessionStart', raw,
+    });
+    const ev = broadcasts.findLast((b) => (b as any).type === 'session.child-changed' && (b as any).sessionId === sid);
+    expect(ev).toBeDefined();
+    expect((ev as any).reason).toBe(expected);
+  });
+
+  it('SessionEnd clears claudeSessionId and broadcasts child-changed (reason=session-end)', () => {
+    const sid = registerSession();
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 1, event: 'SessionStart',
+      raw: { session_id: 'cc-2', source: 'startup' },
+    });
+    expect(registry.get(sid)?.claudeSessionId).toBe('cc-2');
+
+    const before = broadcasts.length;
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 4, event: 'SessionEnd',
+      raw: { session_id: 'cc-2' },
+    });
+    expect(registry.get(sid)?.claudeSessionId).toBeNull();
+    const ev = broadcasts.slice(before).findLast(
+      (b) => (b as any).type === 'session.child-changed',
+    );
+    expect(ev).toMatchObject({
+      sessionId: sid, previousClaudeSessionId: 'cc-2',
+      claudeSessionId: null, reason: 'session-end',
+    });
+  });
+
+  it('SessionEnd when claudeSessionId is already null is a no-op (no broadcast)', () => {
+    const sid = registerSession();   // fresh, no SessionStart yet
+    const before = broadcasts.length;
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 5, event: 'SessionEnd', raw: {},
+    });
+    expect(
+      broadcasts.slice(before).find((b) => (b as any).type === 'session.child-changed'),
+    ).toBeUndefined();
+  });
+
+  it('boundary cancels pending approvals with reason=child-session-changed', () => {
+    const sid = registerSession();
+    // Prime with cc-1 so the next SessionStart triggers a real boundary.
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 1, event: 'SessionStart',
+      raw: { session_id: 'cc-1', source: 'startup' },
+    });
+    // Open an approval under cc-1.
+    const { request } = approvals.open({
+      sessionId: sid, tool: 'Bash', toolInput: { command: 'ls' },
+      origin: 'permission', questions: [],
+    });
+    expect(approvals.pendingForSession(sid).length).toBe(1);
+
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 2, event: 'SessionStart',
+      raw: { session_id: 'cc-2', source: 'resume' },
+    });
+
+    expect(approvals.pendingForSession(sid).length).toBe(0);
+    const resolved = findResolvedFrame(request.requestId);
+    expect(resolved).toBeDefined();
+    expect(resolved!.reason).toBe('child-session-changed');
+    expect(resolved!.resolvedBy).toBeNull();
+  });
+
+  it('transcript-path fixup still runs alongside boundary detection', () => {
+    const sid = registerSession();
+    // Original sessionFilePath was '/x/session.jsonl' from registerSession.
+    // Fire SessionStart with both new session_id AND new transcript_path.
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 1, event: 'SessionStart',
+      raw: {
+        session_id:      'cc-1',
+        source:          'startup',
+        transcript_path: '/tmp/new-transcript.jsonl',
+      },
+    });
+    const rec = registry.get(sid);
+    expect(rec?.claudeSessionId).toBe('cc-1');
+    expect(rec?.sessionFilePath).toBe('/tmp/new-transcript.jsonl');
+  });
+
+  it('non-SessionStart / non-SessionEnd events are passed through without boundary work', () => {
+    const sid = registerSession();
+    const before = broadcasts.length;
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 1, event: 'PreToolUse',
+      raw: { tool_name: 'Bash', tool_input: { command: 'ls' }, session_id: 'cc-x' },
+    });
+    expect(
+      broadcasts.slice(before).find((b) => (b as any).type === 'session.child-changed'),
+    ).toBeUndefined();
+    expect(registry.get(sid)?.claudeSessionId).toBeNull();
+    expect(innerCalls.length).toBe(1);
   });
 });

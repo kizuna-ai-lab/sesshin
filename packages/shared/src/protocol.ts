@@ -169,6 +169,13 @@ export const SessionPromptRequestResolvedSchema = z.object({
     'cancelled-no-clients',
     'cancelled-tool-completed',
     'session-ended',
+    // child-session-changed: the underlying Claude conversation crossed a
+    // session boundary (raw.session_id changed via /clear, --resume, or
+    // fresh startup) while this approval was still pending. The outgoing
+    // child can no longer answer it, so we resolve it as a system-initiated
+    // cancellation (resolvedBy: null). Emitted from wire.ts boundary
+    // detection alongside session.child-changed.
+    'child-session-changed',
   ]),
   // Identifies who caused the resolution. Lets clients render UX
   // distinguishing "approved by another client" from system-initiated
@@ -190,18 +197,46 @@ export const SessionConfigChangedSchema = z.object({
   sessionGateOverride: z.enum(['disabled','auto','always']).nullable(),
 });
 
+// Server tells subscribers that the Claude child process bound to this
+// sesshin session crossed a session boundary — i.e. raw.session_id changed
+// (SessionStart for /clear, --resume, fresh startup) or the child's
+// session was cleared on SessionEnd. Lets clients drop child-scoped
+// state (pending approvals tied to old toolUseIds, transcript-position
+// hints, etc.) when the underlying Claude session identity changes.
+//
+// `claudeSessionId` is nullable to cover the SessionEnd case where the
+// current child returns to null. `previousClaudeSessionId` is similarly
+// nullable for the first SessionStart of a fresh sesshin session.
+//
+// `reason` is best-effort, derived from Claude's SessionStart `source`
+// field (`'startup' | 'clear' | 'resume' | 'compact'` per the hook
+// contract). `'compact'` is intentionally NOT a valid value here:
+// compact reuses the same session_id, so no boundary event fires.
+// `'session-end'` is the value used on the SessionEnd-driven clear.
+// `'unknown'` is the fallback when source is missing or unrecognized.
+//
+// Gated on `state` capability (mirrors session.config-changed).
+export const SessionChildChangedSchema = z.object({
+  type:                    z.literal('session.child-changed'),
+  sessionId:               z.string(),
+  previousClaudeSessionId: z.string().nullable(),
+  claudeSessionId:         z.string().nullable(),
+  reason:                  z.enum(['startup','clear','resume','session-end','unknown']),
+});
+
 export const DownstreamMessageSchema = z.discriminatedUnion('type', [
   ServerHelloSchema, SessionListSchema, SessionAddedSchema, SessionRemovedSchema,
   SessionStateMsgSchema, SessionEventMsgSchema, SessionSummaryMsgSchema,
   SessionAttentionSchema, SessionRawSchema, ServerErrorSchema, ServerPingSchema,
   SessionPromptRequestSchema, SessionPromptRequestResolvedSchema,
-  SessionConfigChangedSchema,
+  SessionConfigChangedSchema, SessionChildChangedSchema,
 ]);
 export type DownstreamMessage = z.infer<typeof DownstreamMessageSchema>;
 
 export type SessionPromptRequest         = z.infer<typeof SessionPromptRequestSchema>;
 export type SessionPromptRequestResolved = z.infer<typeof SessionPromptRequestResolvedSchema>;
 export type SessionConfigChanged         = z.infer<typeof SessionConfigChangedSchema>;
+export type SessionChildChanged          = z.infer<typeof SessionChildChangedSchema>;
 export type PromptResponse               = z.infer<typeof PromptResponseSchema>;
 export type PromptResponseAnswer         = z.infer<typeof PromptResponseSchema>['answers'][number];
 export type PromptQuestion               = z.infer<typeof PromptQuestionSchema>;

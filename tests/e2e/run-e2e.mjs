@@ -79,15 +79,28 @@ async function main() {
   }
   if (!hubUp) fail('hub failed to come up within 10s');
 
-  // discover session
+  // discover this run's session. Old e2e logic assumed there would be exactly
+  // one live session in the hub, which flakes if a prior run leaked a session
+  // briefly before teardown. Prefer the newest session for this cwd.
   let sid = null;
   for (let i = 0; i < 50; i++) {
     const list = await (await fetch('http://127.0.0.1:9663/api/sessions')).json();
-    if (list.length === 1) { sid = list[0].id; break; }
-    if (list.length > 1) fail(`expected 1 session, got ${list.length}`);
+    const matches = list.filter((s) => s.cwd === ROOT);
+    if (matches.length >= 1) {
+      matches.sort((a, b) => b.startedAt - a.startedAt);
+      sid = matches[0].id;
+      break;
+    }
     await new Promise((r) => setTimeout(r, 100));
   }
   if (!sid) fail('no session registered within 5s');
+
+  const current = await (await fetch('http://127.0.0.1:9663/api/sessions')).json();
+  const matching = current.filter((s) => s.cwd === ROOT);
+  if (matching.length > 1) {
+    matching.sort((a, b) => b.startedAt - a.startedAt);
+    if (matching[0]?.id !== sid) fail('selected session is not the newest matching session');
+  }
 
   // open WS, capture events
   const ws = new WS('ws://127.0.0.1:9662/v1/ws');
@@ -102,8 +115,8 @@ async function main() {
     if (msg.type === 'session.state')   got.state = msg.state;
     if (msg.type === 'session.prompt-request') {
       got.confirmations.push(msg);
-      // Verify path B: respond with 'allow'. The hub must release the
-      // PreToolUse hook handler with this decision.
+      // Verify the PermissionRequest path: respond with 'allow'. The hub
+      // must release the pending approval with this decision.
       ws.send(JSON.stringify({
         type: 'prompt-response',
         sessionId: msg.sessionId, requestId: msg.requestId,
@@ -113,14 +126,20 @@ async function main() {
     if (msg.type === 'session.prompt-request.resolved') got.confirmationResolved += 1;
   });
 
-  // wait until stub-claude prompts for confirmation AND the session state allows input
+  // Wait until the remote approval has resolved AND the stub's prompt is
+  // visible before sending literal input back into Claude's PTY. Sending the
+  // text too early races the approval release and can get dropped.
   await new Promise((res, rej) => {
     const start = Date.now();
     const t = setInterval(() => {
       const promptShown = cliOut.includes('Confirm? (y/n)');
+      const approvalResolved = got.confirmationResolved > 0;
       const stateOk = got.state === 'idle' || got.state === 'awaiting-input' || got.state === 'awaiting-confirmation';
-      if (promptShown && stateOk) { clearInterval(t); res(); }
-      else if (Date.now() - start > 15000) { clearInterval(t); rej(new Error(`timeout waiting for prompt+state. promptShown=${promptShown} state=${got.state} cliOut:\n${cliOut}`)); }
+      if (promptShown && approvalResolved && stateOk) { clearInterval(t); res(); }
+      else if (Date.now() - start > 15000) {
+        clearInterval(t);
+        rej(new Error(`timeout waiting for prompt+approval+state. promptShown=${promptShown} approvalResolved=${approvalResolved} state=${got.state} cliOut:\n${cliOut}`));
+      }
     }, 50);
   });
   // Send a literal "y\r" via input.text — equivalent to the old action:'approve'

@@ -153,20 +153,6 @@ describe('POST /permission/:sessionId — happy paths', () => {
     expect(env.agent).toBe('claude-code');
     expect(env.raw['session_id']).toBe('claude-uuid');
   });
-  it('calls registry.markUsesPermissionRequest before dispatch (sticky opt-in)', async () => {
-    svr = createRestServer({
-      registry, approvals,
-      onPermissionRequestApproval: async () => null,
-    });
-    await svr.listen(0, '127.0.0.1');
-    port = svr.address().port;
-    expect(registry.get('s1')!.usesPermissionRequest).toBe(false);
-    await fetch(`http://127.0.0.1:${port}/permission/s1`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(PERM_BODY()),
-    });
-    expect(registry.get('s1')!.usesPermissionRequest).toBe(true);
-  });
 });
 
 describe('POST /permission/:sessionId — failure modes', () => {
@@ -258,34 +244,16 @@ describe('POST /permission/:sessionId — failure modes', () => {
   });
 });
 
-// Integration-level test that exercises the cross-route invariants the wire
-// adapter is responsible for: PermissionRequest sets usesPermissionRequest,
-// and subsequent PreToolUse for that session passes through; PreToolUse for a
-// DIFFERENT session still flows the gate.
-describe('integration: PermissionRequest opt-in suppresses subsequent PreToolUse', () => {
-  it('PermissionRequest then PreToolUse on same session → PreToolUse 204s through', async () => {
-    // Wire adapter equivalent: the PreToolUse callback consults registry
-    // to honor usesPermissionRequest (mirrors wire.ts logic).
-    const onPreToolUseApproval = vi.fn(async (env: { sessionId: string }) => {
-      if (registry.get(env.sessionId)?.usesPermissionRequest === true) return null;
-      return { decision: 'ask' as const };
-    });
-    svr = createRestServer({
-      registry, approvals,
-      onPreToolUseApproval,
-      onPermissionRequestApproval: async () => null,
-    });
+// Integration-level tests that exercise the cross-route invariants the wire
+// adapter is responsible for: PostToolUse cleanup resolves stale pending
+// approvals (originally opened by PermissionRequest) and PreToolUse hooks
+// always pass through (PermissionRequest is now sesshin's only approval gate).
+describe('integration: PreToolUse passthrough and PostToolUse stale-cleanup', () => {
+  it('PreToolUse hooks always 204 through (no gate)', async () => {
+    svr = createRestServer({ registry, approvals });
     await svr.listen(0, '127.0.0.1');
     port = svr.address().port;
 
-    // Step 1: PermissionRequest hit on s1 — sets the flag.
-    await fetch(`http://127.0.0.1:${port}/permission/s1`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(PERM_BODY()),
-    });
-    expect(registry.get('s1')!.usesPermissionRequest).toBe(true);
-
-    // Step 2: PreToolUse on s1 — should 204 because callback returns null.
     const pre = await fetch(`http://127.0.0.1:${port}/hooks`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -294,29 +262,6 @@ describe('integration: PermissionRequest opt-in suppresses subsequent PreToolUse
       }),
     });
     expect(pre.status).toBe(204);
-    expect(onPreToolUseApproval).toHaveBeenCalledTimes(1);
-  });
-  it('different session has no opt-in; PreToolUse still drives a decision', async () => {
-    registry.register({ id: 's2', name: 'n', agent: 'claude-code', cwd: '/', pid: 2, sessionFilePath: '/x' });
-    const onPreToolUseApproval = vi.fn(async (env: { sessionId: string }) => {
-      if (registry.get(env.sessionId)?.usesPermissionRequest === true) return null;
-      return { decision: 'ask' as const, reason: 'no opt-in' };
-    });
-    svr = createRestServer({ registry, approvals, onPreToolUseApproval });
-    await svr.listen(0, '127.0.0.1');
-    port = svr.address().port;
-
-    expect(registry.get('s2')!.usesPermissionRequest).toBe(false);
-    const r = await fetch(`http://127.0.0.1:${port}/hooks`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        agent: 'claude-code', sessionId: 's2', ts: Date.now(), event: 'PreToolUse',
-        raw: { nativeEvent: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' } },
-      }),
-    });
-    expect(r.status).toBe(200);
-    const j = await r.json();
-    expect(j.hookSpecificOutput.permissionDecision).toBe('ask');
   });
   it('PostToolUse cleanup of a stale pending approval invokes onApprovalsCleanedUp with the requestId', async () => {
     const cleaned: Array<{ sessionId: string; requestIds: string[] }> = [];
@@ -422,5 +367,86 @@ describe('integration: PermissionRequest opt-in suppresses subsequent PreToolUse
     expect(j.hookSpecificOutput.decision.behavior).toBe('deny');
     expect(j.hookSpecificOutput.decision.message).toContain('moved past pending request');
     expect(resolvedDecision?.decision).toBe('deny');
+  });
+});
+
+// Subagents (agent_id present) run headless inside Claude with no TUI fallback,
+// so a 204 passthrough on a subagent's PermissionRequest resolves to a silent
+// auto-deny on Claude's side. Branch the fallback: subagents fail-closed with
+// a diagnostic deny; main-thread keeps failing-open to 204.
+describe('PermissionRequest fallback by agent_id', () => {
+  it('subagent (agent_id present): handler throws → 200 deny with diagnostic message', async () => {
+    svr = createRestServer({
+      registry, approvals,
+      onPermissionRequestApproval: async () => { throw new Error('boom'); },
+    });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(PERM_BODY({ agent_id: 'sub-abc' })),
+    });
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.hookSpecificOutput.decision.behavior).toBe('deny');
+    expect(j.hookSpecificOutput.decision.message).toMatch(/sesshin/i);
+  });
+
+  it('subagent: handler returns null → 200 deny (no TUI fallback in headless)', async () => {
+    svr = createRestServer({
+      registry, approvals,
+      onPermissionRequestApproval: async () => null,
+    });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(PERM_BODY({ agent_id: 'sub-abc' })),
+    });
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.hookSpecificOutput.decision.behavior).toBe('deny');
+  });
+
+  it('subagent: no handler registered → 200 deny (headless can\'t fall back to TUI)', async () => {
+    svr = createRestServer({ registry, approvals });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(PERM_BODY({ agent_id: 'sub-abc' })),
+    });
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.hookSpecificOutput.decision.behavior).toBe('deny');
+    expect(j.hookSpecificOutput.decision.message).toMatch(/sesshin/i);
+  });
+
+  it('main thread (no agent_id): handler throws → 204 passthrough (TUI takes over)', async () => {
+    svr = createRestServer({
+      registry, approvals,
+      onPermissionRequestApproval: async () => { throw new Error('boom'); },
+    });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(PERM_BODY()),
+    });
+    expect(r.status).toBe(204);
+  });
+
+  it('main thread: handler returns null → 204 passthrough', async () => {
+    svr = createRestServer({
+      registry, approvals,
+      onPermissionRequestApproval: async () => null,
+    });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(PERM_BODY()),
+    });
+    expect(r.status).toBe(204);
   });
 });

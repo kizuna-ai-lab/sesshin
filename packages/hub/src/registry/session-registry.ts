@@ -34,16 +34,9 @@ export interface SessionRecord extends SessionInfo {
   fileTailCursor: number;
   lastHeartbeat: number;
   claudeAllowRules: string[];
-  sessionAllowList: string[];
   sessionGateOverride: 'disabled' | 'auto' | 'always' | null;
   pin: string | null;
   quietUntil: number | null;
-  /**
-   * True once a PermissionRequest HTTP hook has been observed for this session.
-   * Sticky for the lifetime of the session — once the real approval gate is
-   * known to be wired, sesshin's PreToolUse adapter passes through.
-   */
-  usesPermissionRequest: boolean;
 }
 
 export class SessionRegistry extends EventEmitter {
@@ -53,6 +46,7 @@ export class SessionRegistry extends EventEmitter {
     const rec: SessionRecord = {
       id: input.id,
       name: input.name,
+      claudeSessionId: null,
       agent: input.agent,
       cwd: input.cwd,
       pid: input.pid,
@@ -64,11 +58,9 @@ export class SessionRegistry extends EventEmitter {
       fileTailCursor: 0,
       lastHeartbeat: Date.now(),
       claudeAllowRules: [],
-      sessionAllowList: [],
       sessionGateOverride: null,
       pin: null,
       quietUntil: null,
-      usesPermissionRequest: false,
     };
     this.sessions.set(rec.id, rec);
     this.emit('session-added', this.publicView(rec));
@@ -141,27 +133,44 @@ export class SessionRegistry extends EventEmitter {
     return true;
   }
 
+  setClaudeSessionId(id: string, claudeId: string): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    if (s.claudeSessionId === claudeId) return false;
+    s.claudeSessionId = claudeId;
+    this.emit('config-changed', this.publicView(s));
+    return true;
+  }
+
+  clearClaudeSessionId(id: string): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    if (s.claudeSessionId === null) return false;
+    s.claudeSessionId = null;
+    this.emit('config-changed', this.publicView(s));
+    return true;
+  }
+
+  /**
+   * Reset state scoped to a single Claude conversation. Called on
+   * child-session boundary (new claude session_id observed). Parent-scoped
+   * state — pin, quietUntil, sessionGateOverride, claudeAllowRules,
+   * client subscriptions — is untouched. sessionFilePath is left alone too
+   * because setSessionFilePath resets it (and the tail cursor) when
+   * SessionStart delivers the new transcript_path.
+   */
+  resetChildScopedState(id: string): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    s.fileTailCursor = 0;
+    s.lastSummaryId = null;
+  }
+
   recordHeartbeat(id: string): boolean {
     const s = this.sessions.get(id);
     if (!s) return false;
     s.lastHeartbeat = Date.now();
     return true;
-  }
-
-  addSessionAllow(id: string, rule: string): boolean {
-    const s = this.sessions.get(id);
-    if (!s) return false;
-    if (s.sessionAllowList.includes(rule)) return false;
-    s.sessionAllowList.push(rule);
-    return true;
-  }
-
-  removeSessionAllow(id: string, rule: string): boolean {
-    const s = this.sessions.get(id);
-    if (!s) return false;
-    const before = s.sessionAllowList.length;
-    s.sessionAllowList = s.sessionAllowList.filter((r) => r !== rule);
-    return s.sessionAllowList.length !== before;
   }
 
   setSessionGateOverride(id: string, p: 'disabled' | 'auto' | 'always'): boolean {
@@ -203,25 +212,11 @@ export class SessionRegistry extends EventEmitter {
     return this.sessions.get(id)?.quietUntil ?? null;
   }
 
-  /**
-   * Mark a session as using the PermissionRequest HTTP hook as its real
-   * approval gate. Once set the flag is sticky for the session lifetime.
-   * Returns true iff this call changed the flag from false→true.
-   */
-  markUsesPermissionRequest(id: string): boolean {
-    const s = this.sessions.get(id);
-    if (!s) return false;
-    if (s.usesPermissionRequest) return false;
-    s.usesPermissionRequest = true;
-    return true;
-  }
-
   private publicView(s: SessionRecord): SessionInfo {
     const {
       // Stripped fields (private to the hub):
       fileTailCursor: _c, lastHeartbeat: _h,
-      claudeAllowRules: _a, sessionAllowList: _l,
-      usesPermissionRequest: _u,
+      claudeAllowRules: _a,
       // Surfaced fields stay in `pub`:
       sessionFilePath,
       ...pub

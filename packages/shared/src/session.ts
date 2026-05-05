@@ -42,6 +42,12 @@ export const AgentEnum = z.enum(['claude-code', 'codex', 'gemini', 'other']);
 export const SessionInfoSchema = z.object({
   id:              z.string(),
   name:            z.string(),
+  /**
+   * Claude Code's own session_id for the *current* conversation in this
+   * sesshin process. Changes on /clear, --resume, fresh startup. Stable
+   * across /compact. null while no Claude session is active.
+   */
+  claudeSessionId: z.string().nullable(),
   agent:           AgentEnum,
   cwd:             z.string(),
   pid:             z.number().int(),

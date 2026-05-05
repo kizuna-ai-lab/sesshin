@@ -30,11 +30,10 @@ export function diagnosticsSnapshot(deps: DiagnosticsDeps): {
     name: string;
     state: string;
     permissionMode: string;
-    sessionAllowList: string[];
+    claudeSessionId: string | null;
     claudeAllowRules: string[];
     pendingApprovals: number;
     hasSubscribedActionsClient: boolean;
-    usesPermissionRequest: boolean;
     sessionFilePath?: string;
   }>;
 } {
@@ -46,11 +45,10 @@ export function diagnosticsSnapshot(deps: DiagnosticsDeps): {
         name: info.name,
         state: info.state,
         permissionMode: info.substate.permissionMode,
-        sessionAllowList: rec.sessionAllowList,
+        claudeSessionId: info.claudeSessionId,
         claudeAllowRules: rec.claudeAllowRules,
         pendingApprovals: deps.approvals.pendingForSession(info.id).length,
         hasSubscribedActionsClient: deps.hasSubscribedActionsClient(info.id),
-        usesPermissionRequest: rec.usesPermissionRequest,
         ...(rec.sessionFilePath ? { sessionFilePath: rec.sessionFilePath } : {}),
       };
     }),

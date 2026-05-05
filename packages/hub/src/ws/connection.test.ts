@@ -315,12 +315,12 @@ describe('subscribe-time replay of pending prompt-requests', () => {
     liveClient.send(JSON.stringify({ type: 'subscribe', sessions: [sid], since: null }));
     await waitFor(() => liveFrames.some((f) => f.type === 'session.list'));
 
-    // liveBroadcastShape must be kept in sync with wire.ts's broadcast literals
-    // at packages/hub/src/wire.ts (the two onPreToolUseApproval and
-    // onPermissionRequestApproval handlers). Drift between this literal and
-    // wire.ts will cause silent test passes — the spec calls this out as a
-    // known limitation. The connection.ts replay literal is the only thing
-    // being directly exercised here.
+    // liveBroadcastShape must be kept in sync with wire.ts's broadcast
+    // literal at packages/hub/src/wire.ts (the onPermissionRequestApproval
+    // handler). Drift between this literal and wire.ts will cause silent
+    // test passes — the spec calls this out as a known limitation. The
+    // connection.ts replay literal is the only thing being directly
+    // exercised here.
     const liveBroadcastShape = {
       type: 'session.prompt-request',
       sessionId: sid,

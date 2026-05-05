@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { bashHandler } from './bash.js';
 
-const ctx = { permissionMode: 'default' as const, cwd: '/x', sessionAllowList: [] };
+const ctx = { permissionMode: 'default' as const, cwd: '/x' };
 
 describe('bashHandler', () => {
   it('renders the command in a fenced bash block + 3 options', () => {
@@ -26,12 +26,17 @@ describe('bashHandler', () => {
     expect(d).toEqual({ kind: 'deny', additionalContext: 'use grep instead' });
   });
 
-  it('decide(yes-prefix, freeText) → allow + sessionAllowAdd', () => {
+  it('decide(yes-prefix, freeText) → allow + addRules updatedPermissions', () => {
     const d = bashHandler.decide(
       [{ questionIndex: 0, selectedKeys: ['yes-prefix'], freeText: 'npm run:*' }],
       { command: 'npm run build' }, ctx,
     );
-    expect(d).toMatchObject({ kind: 'allow', sessionAllowAdd: 'Bash(npm run:*)' });
+    expect(d).toMatchObject({
+      kind: 'allow',
+      updatedPermissions: [
+        { type: 'addRules', behavior: 'allow', destination: 'session', rules: [{ toolName: 'Bash', ruleContent: 'npm run:*' }] },
+      ],
+    });
   });
 
   it('decide(yes-prefix, no freeText) → allow + heuristic prefix from command', () => {
@@ -39,7 +44,12 @@ describe('bashHandler', () => {
       [{ questionIndex: 0, selectedKeys: ['yes-prefix'] }],
       { command: 'git log --oneline' }, ctx,
     );
-    expect(d).toMatchObject({ kind: 'allow', sessionAllowAdd: 'Bash(git log:*)' });
+    expect(d).toMatchObject({
+      kind: 'allow',
+      updatedPermissions: [
+        { type: 'addRules', behavior: 'allow', destination: 'session', rules: [{ toolName: 'Bash', ruleContent: 'git log:*' }] },
+      ],
+    });
   });
 
   it('decide() with no selectedKeys falls through to ask', () => {

@@ -82,9 +82,7 @@ export function matchRule(
       // mirrors claude's upstream behavior — sesshin doesn't try to canonicalize
       // because doing so would diverge from claude's own matching semantics.
       // Practical recommendation: for custom tools, prefer the bare-toolname
-      // form (e.g., `mcp__server__doStuff`) which matches all calls, or rely on
-      // the sessionAllowList populated by handler `sessionAllowAdd` (which uses
-      // JSON.stringify on the same input shape, so the round-trip is consistent).
+      // form (e.g., `mcp__server__doStuff`) which matches all calls.
       return JSON.stringify(toolInput) === rule.ruleContent;
     }
   }

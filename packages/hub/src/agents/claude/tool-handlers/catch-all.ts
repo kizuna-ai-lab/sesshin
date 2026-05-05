@@ -34,7 +34,17 @@ export const catchAllHandler: ToolHandler = {
     if (key === 'allow') return a?.freeText ? { kind: 'allow', additionalContext: a.freeText } : { kind: 'allow' };
     if (typeof key === 'string' && key.startsWith('allow-this-session:')) {
       const tool = key.slice('allow-this-session:'.length);
-      return { kind: 'allow', sessionAllowAdd: `${tool}(${JSON.stringify(input)})` };
+      return {
+        kind: 'allow',
+        updatedPermissions: [
+          {
+            type: 'addRules',
+            behavior: 'allow',
+            destination: 'session',
+            rules: [{ toolName: tool, ruleContent: JSON.stringify(input) }],
+          },
+        ],
+      };
     }
     if (key === 'deny') return a?.freeText ? { kind: 'deny', additionalContext: a.freeText } : { kind: 'deny' };
     return { kind: 'ask' };

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { exitPlanModeHandler } from './exit-plan-mode.js';
 
-const ctx = { permissionMode: 'plan' as const, cwd: '/x', sessionAllowList: [] };
+const ctx = { permissionMode: 'plan' as const, cwd: '/x' };
 
 describe('exitPlanModeHandler', () => {
   it('renders plan body + 3 options', () => {
@@ -36,7 +36,7 @@ describe('exitPlanModeHandler — PermissionRequest decision-shape mapping invar
   // The wire.ts onPermissionRequestApproval adapter (T15) maps HookDecision
   // to PermissionRequest-shape JSON. Here we verify the kinds and fields
   // the handler produces are exactly what that adapter expects.
-  const c = { permissionMode: 'default' as const, cwd: '/', sessionAllowList: [] };
+  const c = { permissionMode: 'default' as const, cwd: '/' };
   it('yes-default → kind:allow + updatedPermissions setMode→default (adapter → behavior:"allow" + updatedPermissions)', () => {
     expect(exitPlanModeHandler.decide(
       [{ questionIndex: 0, selectedKeys: ['yes-default'] }], { plan: 'p' }, c,

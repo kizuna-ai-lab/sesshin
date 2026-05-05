@@ -57,25 +57,6 @@ describe('SessionRegistry', () => {
     expect(r.setPermissionMode('missing', 'plan')).toBe(false);
   });
 
-  it('addSessionAllow appends rules; idempotent on dup', () => {
-    const r = makeReg();
-    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    expect(r.addSessionAllow('s1', 'Bash(git log:*)')).toBe(true);
-    expect(r.addSessionAllow('s1', 'Bash(git log:*)')).toBe(false);
-    expect(r.get('s1')?.sessionAllowList).toEqual(['Bash(git log:*)']);
-    expect(r.addSessionAllow('missing', 'Bash(ls:*)')).toBe(false);
-  });
-
-  it('removeSessionAllow drops a rule; returns false if absent or session missing', () => {
-    const r = makeReg();
-    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    r.addSessionAllow('s1', 'Bash(git log:*)');
-    expect(r.removeSessionAllow('s1', 'Bash(git log:*)')).toBe(true);
-    expect(r.get('s1')?.sessionAllowList).toEqual([]);
-    expect(r.removeSessionAllow('s1', 'Bash(git log:*)')).toBe(false);
-    expect(r.removeSessionAllow('missing', 'x')).toBe(false);
-  });
-
   it('setSessionGateOverride is read via getSessionGateOverride', () => {
     const r = makeReg();
     r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
@@ -105,30 +86,6 @@ describe('SessionRegistry', () => {
   });
 });
 
-describe('SessionRegistry — usesPermissionRequest', () => {
-  it('newly-registered session has usesPermissionRequest=false', () => {
-    const r = makeReg();
-    r.register({ id: 's', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    expect(r.get('s')!.usesPermissionRequest).toBe(false);
-  });
-  it('markUsesPermissionRequest sets the flag and returns true on first call', () => {
-    const r = makeReg();
-    r.register({ id: 's', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    expect(r.markUsesPermissionRequest('s')).toBe(true);
-    expect(r.get('s')!.usesPermissionRequest).toBe(true);
-  });
-  it('markUsesPermissionRequest returns false when already set (idempotent)', () => {
-    const r = makeReg();
-    r.register({ id: 's', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    r.markUsesPermissionRequest('s');
-    expect(r.markUsesPermissionRequest('s')).toBe(false);
-  });
-  it('markUsesPermissionRequest returns false when session not registered', () => {
-    const r = makeReg();
-    expect(r.markUsesPermissionRequest('missing')).toBe(false);
-  });
-});
-
 describe('SessionRegistry — publicView surfaces sessionFilePath', () => {
   it('list() includes sessionFilePath when non-empty', () => {
     const r = makeReg();
@@ -142,18 +99,16 @@ describe('SessionRegistry — publicView surfaces sessionFilePath', () => {
   });
   it('emitted session-added view also surfaces it', () => {
     const r = makeReg();
-    let captured: { sessionFilePath?: string } = {};
+    let captured: { sessionFilePath?: string | undefined; claudeSessionId: string | null } = { claudeSessionId: null };
     r.on('session-added', (s) => { captured = s; });
     r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/p.jsonl' });
     expect(captured.sessionFilePath).toBe('/p.jsonl');
   });
-  it('publicView does NOT leak claudeAllowRules / sessionAllowList / usesPermissionRequest / etc.', () => {
+  it('publicView does NOT leak claudeAllowRules / etc.', () => {
     const r = makeReg();
     r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/p.jsonl' });
     const view = r.list()[0] as Record<string, unknown>;
     expect('claudeAllowRules' in view).toBe(false);
-    expect('sessionAllowList' in view).toBe(false);
-    expect('usesPermissionRequest' in view).toBe(false);
     expect('lastHeartbeat' in view).toBe(false);
     expect('fileTailCursor' in view).toBe(false);
     // pin, quietUntil, sessionGateOverride are now surfaced in publicView:
@@ -241,8 +196,6 @@ describe('publicView and config-changed event', () => {
     r.setPin(id, 'x');
     expect(captured).not.toBeNull();
     expect('claudeAllowRules' in captured).toBe(false);
-    expect('sessionAllowList' in captured).toBe(false);
-    expect('usesPermissionRequest' in captured).toBe(false);
   });
 
   it('setPin on unknown session returns false and does not emit', () => {
@@ -251,5 +204,96 @@ describe('publicView and config-changed event', () => {
     r.on('config-changed', (info) => events.push(info));
     expect(r.setPin('nonexistent', 'x')).toBe(false);
     expect(events).toHaveLength(0);
+  });
+});
+
+describe('claudeSessionId tracking', () => {
+  it('starts null', () => {
+    const r = new SessionRegistry();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '' });
+    expect(r.get('s1')?.claudeSessionId).toBeNull();
+  });
+
+  it('setClaudeSessionId returns true on change, false on no-op or unknown', () => {
+    const r = new SessionRegistry();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '' });
+    expect(r.setClaudeSessionId('s1', 'cc-1')).toBe(true);
+    expect(r.setClaudeSessionId('s1', 'cc-1')).toBe(false);
+    expect(r.setClaudeSessionId('s1', 'cc-2')).toBe(true);
+    expect(r.get('s1')?.claudeSessionId).toBe('cc-2');
+    expect(r.setClaudeSessionId('unknown', 'cc-x')).toBe(false);
+  });
+
+  it('clearClaudeSessionId returns true only when going non-null → null', () => {
+    const r = new SessionRegistry();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '' });
+    // No-op when already null
+    expect(r.clearClaudeSessionId('s1')).toBe(false);
+    r.setClaudeSessionId('s1', 'cc-1');
+    expect(r.clearClaudeSessionId('s1')).toBe(true);
+    expect(r.get('s1')?.claudeSessionId).toBeNull();
+    // No-op on unknown session
+    expect(r.clearClaudeSessionId('unknown')).toBe(false);
+  });
+
+  it('emits config-changed when claudeSessionId changes', () => {
+    const r = new SessionRegistry();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '' });
+    let calls = 0;
+    r.on('config-changed', () => { calls++; });
+    r.setClaudeSessionId('s1', 'cc-1');
+    expect(calls).toBe(1);
+    r.setClaudeSessionId('s1', 'cc-1'); // no-op
+    expect(calls).toBe(1);
+    r.clearClaudeSessionId('s1');
+    expect(calls).toBe(2);
+  });
+
+  it('publicView surfaces claudeSessionId after setClaudeSessionId', () => {
+    const r = new SessionRegistry();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    r.setClaudeSessionId('s1', 'cc-1');
+    const view = r.list().find((s) => s.id === 's1')!;
+    expect(view.claudeSessionId).toBe('cc-1');
+  });
+});
+
+describe('resetChildScopedState', () => {
+  it('clears fileTailCursor and lastSummaryId', () => {
+    const r = new SessionRegistry();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    r.setFileCursor('s1', 999);
+    r.setLastSummary('s1', 'sum-1');
+    r.resetChildScopedState('s1');
+    const rec = r.get('s1');
+    expect(rec?.fileTailCursor).toBe(0);
+    expect(rec?.lastSummaryId).toBeNull();
+  });
+
+  it('keeps parent-scoped state (pin, quietUntil, sessionGateOverride, claudeAllowRules)', () => {
+    const r = new SessionRegistry();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    r.setPin('s1', 'note');
+    r.setQuietUntil('s1', 12345);
+    r.setSessionGateOverride('s1', 'always');
+    r.setClaudeAllowRules('s1', ['Bash(git:*)']);
+    r.resetChildScopedState('s1');
+    const rec = r.get('s1');
+    expect(rec?.pin).toBe('note');
+    expect(rec?.quietUntil).toBe(12345);
+    expect(rec?.sessionGateOverride).toBe('always');
+    expect(rec?.claudeAllowRules).toEqual(['Bash(git:*)']);
+  });
+
+  it('does not touch sessionFilePath', () => {
+    const r = new SessionRegistry();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/some/transcript.jsonl' });
+    r.resetChildScopedState('s1');
+    expect(r.get('s1')?.sessionFilePath).toBe('/some/transcript.jsonl');
+  });
+
+  it('no-op on unknown session', () => {
+    const r = new SessionRegistry();
+    expect(() => r.resetChildScopedState('unknown')).not.toThrow();
   });
 });

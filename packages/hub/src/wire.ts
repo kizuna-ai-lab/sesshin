@@ -8,6 +8,7 @@ import { SessionRegistry } from './registry/session-registry.js';
 import { Checkpoint } from './registry/checkpoint.js';
 import { EventBus } from './event-bus.js';
 import { wireHookIngest } from './observers/hook-ingest.js';
+import type { HookEnvelope } from './agents/claude/normalize-hook.js';
 import { wireJsonlModeTracker } from './observers/jsonl-mode-tracker.js';
 import { wirePtyIdleWatcher, type IdleWatcherConfig } from './observers/pty-idle-watcher.js';
 import { wireStateMachine } from './state-machine/applier.js';
@@ -23,12 +24,10 @@ import { runModeB } from './summarizer/mode-b.js';
 import { wireSummarizerTrigger } from './summarizer-trigger.js';
 import { ApprovalManager } from './approval-manager.js';
 import type { ApprovalOutcome } from './approval-manager.js';
-import { parsePolicy, shouldGatePreToolUse } from './agents/claude/approval-policy.js';
 import { getHandler, setCatchAllToolName } from './agents/claude/tool-handlers/registry.js';
 import type { ToolHandler, HandlerCtx } from './agents/claude/tool-handlers/types.js';
 import type { PermissionUpdate } from '@sesshin/shared';
 import type { HistoryEntry } from './rest/diagnostics.js';
-import type { ApprovalGatePolicy } from './agents/claude/approval-policy.js';
 
 interface PendingHandlerSlot {
   handler:   ToolHandler;
@@ -40,7 +39,6 @@ interface PendingHandlerSlot {
 export interface ApprovalAdapters {
   restDeps: {
     onApprovalsCleanedUp:        NonNullable<RestServerDeps['onApprovalsCleanedUp']>;
-    onPreToolUseApproval:        NonNullable<RestServerDeps['onPreToolUseApproval']>;
     onPermissionRequestApproval: NonNullable<RestServerDeps['onPermissionRequestApproval']>;
     historyForSession:           NonNullable<RestServerDeps['historyForSession']>;
   };
@@ -49,15 +47,20 @@ export interface ApprovalAdapters {
     onPromptResponse:        NonNullable<WsServerDeps['onPromptResponse']>;
   };
   onSessionRemoved: (sessionId: string) => void;
+  // Phase B4: invoked by the wire-level boundary handler when a Claude
+  // session boundary is detected (raw.session_id changed on SessionStart).
+  // Cancels any pending approvals tied to the OUTGOING child and broadcasts
+  // session.prompt-request.resolved with reason=child-session-changed and
+  // resolvedBy=null. Mirrors onSessionRemoved's shape.
+  onClaudeSessionBoundary: (sessionId: string) => void;
 }
 
 export function createApprovalAdapters(opts: {
   registry:     SessionRegistry;
   approvals:    ApprovalManager;
-  approvalGate: ApprovalGatePolicy;
   getWs:        () => WsServerInstance | undefined;
 }): ApprovalAdapters {
-  const { registry, approvals, approvalGate, getWs } = opts;
+  const { registry, approvals, getWs } = opts;
 
   // Per-request state — moved from module scope (was wire.ts:36–42).
   const pendingHandlers          = new Map<string, PendingHandlerSlot>();
@@ -96,9 +99,8 @@ export function createApprovalAdapters(opts: {
     (sessionId, requestIds) => {
       // The stale-cleanup path in rest/server.ts just resolved one or more
       // pending approvals because PostToolUse / Stop arrived for a tool whose
-      // approval was still open (typical scenario: PreToolUse timed out →
-      // sesshin returned ask → CC fired PermissionRequest → user picked in
-      // CC's TUI before answering on the remote → tool ran while sesshin's
+      // approval was still open (typical scenario: user picked in CC's TUI
+      // before answering on the remote → tool ran while sesshin's
       // PermissionRequest long-poll was still hanging). Clean up the per-
       // request maps and tell remote clients the prompt is no longer live so
       // the awaiting card disappears.
@@ -112,102 +114,6 @@ export function createApprovalAdapters(opts: {
           resolvedBy: 'hub-stale-cleanup',
         });
       }
-    };
-
-  const onPreToolUseApproval: ApprovalAdapters['restDeps']['onPreToolUseApproval'] =
-    async (env) => {
-      // Mode-aware gating: when claude wouldn't have prompted on its own
-      // (auto / acceptEdits / bypassPermissions / read-only tool), return
-      // null so the REST layer responds 204 and the hook handler stays
-      // silent. Claude then follows its normal mode logic and the user
-      // sees no extra prompts.
-      const session = registry.get(env.sessionId);
-      const knownMode = session?.substate.permissionMode;
-      // Per-session gate override (set via /sesshin-gate or POST /api/sessions/:id/gate)
-      // takes precedence over the env-level SESSHIN_APPROVAL_GATE policy.
-      const sessionPolicy = registry.getSessionGateOverride(env.sessionId);
-      const policyForCall = sessionPolicy ?? approvalGate;
-      // hasSubscribedClient: stay transparent when no actions-capable client
-      // is currently subscribed to this session. Hook handler returns 204 →
-      // claude follows its native permission logic instead of waiting on a
-      // ghost remote.
-      const hasSubscribedClient = getWs()?.hasSubscribedActionsClient(env.sessionId) ?? false;
-      // Once a PermissionRequest HTTP hook has been observed for this session,
-      // PreToolUse short-circuits: the real gate is somewhere else. Stops us
-      // from double-gating the same tool call.
-      const usesPR = registry.get(env.sessionId)?.usesPermissionRequest === true;
-      if (!shouldGatePreToolUse(env.raw, knownMode, policyForCall, {
-        sessionAllowList: session?.sessionAllowList ?? [],
-        claudeAllowRules: session?.claudeAllowRules ?? [],
-      }, hasSubscribedClient, usesPR)) return null;
-      const tool = typeof env.raw['tool_name'] === 'string' ? env.raw['tool_name'] : 'unknown';
-      const rawInput = env.raw['tool_input'];
-      const toolInput: Record<string, unknown> =
-        rawInput !== null && typeof rawInput === 'object'
-          ? (rawInput as Record<string, unknown>)
-          : {};
-      const toolUseId = typeof env.raw['tool_use_id'] === 'string' ? env.raw['tool_use_id'] : undefined;
-
-      setCatchAllToolName(tool);
-      const handler = getHandler(tool);
-      const ctx: HandlerCtx = {
-        permissionMode: knownMode ?? 'default',
-        cwd: session?.cwd ?? process.cwd(),
-        sessionAllowList: session?.sessionAllowList ?? [],
-      };
-      const rendered = handler.render(toolInput, ctx);
-
-      const { request, decision } = approvals.open({
-        sessionId: env.sessionId, tool, toolInput,
-        ...(toolUseId !== undefined ? { toolUseId } : {}),
-        onExpire: (a) => {
-          getWs()?.broadcast({
-            type: 'session.prompt-request.resolved',
-            sessionId: a.sessionId, requestId: a.requestId, reason: 'timeout',
-            resolvedBy: null,
-          });
-        },
-        origin: rendered.origin ?? 'permission',
-        ...(rendered.body !== undefined ? { body: rendered.body } : {}),
-        questions: rendered.questions,
-      });
-
-      registry.updateState(env.sessionId, 'awaiting-confirmation');
-      getWs()?.broadcast({
-        type: 'session.prompt-request',
-        sessionId: env.sessionId,
-        requestId: request.requestId,
-        origin: rendered.origin ?? 'permission',
-        toolName: tool,
-        ...(toolUseId !== undefined ? { toolUseId } : {}),
-        expiresAt: request.expiresAt,
-        ...(rendered.body !== undefined ? { body: rendered.body } : {}),
-        questions: rendered.questions,
-      });
-
-      pendingHandlers.set(request.requestId, { handler, ctx, toolInput, tool });
-
-      // Use try/finally so pendingHandlers + pendingUpdated{Input,Permissions}
-      // are always cleaned up — including the stale-cleanup, timeout, and
-      // session-end paths where the resolution doesn't come back through
-      // onPromptResponse. Without this, those paths leaked map slots
-      // indefinitely. PreToolUse's wire response doesn't carry
-      // updatedPermissions (that's PermissionRequest-only), but cleanup is
-      // still needed in case the same handler set both fields.
-      let out: ApprovalOutcome;
-      let ui: Record<string, unknown> | undefined;
-      try {
-        out = await decision;
-        // Whichever path ended the approval, restore the session to running so
-        // the laptop and remote can keep typing.
-        registry.updateState(env.sessionId, 'running');
-        ui = pendingUpdatedInput.get(request.requestId);
-      } finally {
-        pendingHandlers.delete(request.requestId);
-        pendingUpdatedInput.delete(request.requestId);
-        pendingUpdatedPermissions.delete(request.requestId);
-      }
-      return { ...out, ...(ui ? { updatedInput: ui } : {}) };
     };
 
   const onPermissionRequestApproval: ApprovalAdapters['restDeps']['onPermissionRequestApproval'] =
@@ -231,7 +137,6 @@ export function createApprovalAdapters(opts: {
       const ctx: HandlerCtx = {
         permissionMode: knownMode ?? 'default',
         cwd: session?.cwd ?? process.cwd(),
-        sessionAllowList: session?.sessionAllowList ?? [],
       };
       const rendered = handler.render(toolInput, ctx);
 
@@ -265,8 +170,10 @@ export function createApprovalAdapters(opts: {
 
       pendingHandlers.set(request.requestId, { handler, ctx, toolInput, tool });
 
-      // Mirror of the PreToolUse adapter's try/finally — guarantees cleanup
-      // on stale-cleanup / timeout / session-end paths too.
+      // try/finally guarantees cleanup of pendingHandlers +
+      // pendingUpdated{Input,Permissions} on every resolution path —
+      // decided, stale-cleanup, timeout, session-end, child-session
+      // boundary. Without this, those paths leaked map slots indefinitely.
       let out: ApprovalOutcome;
       let ui: Record<string, unknown> | undefined;
       let up: PermissionUpdate[] | undefined;
@@ -301,9 +208,9 @@ export function createApprovalAdapters(opts: {
   const onLastActionsClientGone: ApprovalAdapters['wsDeps']['onLastActionsClientGone'] =
     (sessionId) => {
       // The last actions-capable client just unsubscribed/disconnected. Any
-      // pending PreToolUse approval for this session is now waiting on a
-      // ghost. Resolve them as 'ask' immediately so claude's TUI prompt
-      // takes over instead of timing out 60s later.
+      // pending PermissionRequest approval for this session is now waiting
+      // on a ghost. Resolve them immediately so claude's TUI prompt takes
+      // over instead of timing out 60s later.
       const pending = approvals.pendingForSession(sessionId);
       if (pending.length === 0) return;
       // Clean up per-request maps + broadcast resolution BEFORE calling
@@ -357,11 +264,6 @@ export function createApprovalAdapters(opts: {
           break;
       }
 
-      if (decision.kind === 'allow' && decision.sessionAllowAdd) {
-        const rec = registry.get(sessionId);
-        if (rec) rec.sessionAllowList.push(decision.sessionAllowAdd);
-      }
-
       if (decision.kind === 'allow' && decision.updatedInput) {
         pendingUpdatedInput.set(requestId, decision.updatedInput);
       }
@@ -399,10 +301,28 @@ export function createApprovalAdapters(opts: {
     approvals.cancelForSession(id);
   };
 
+  // Phase B4: child Claude session boundary. Same shape as
+  // onSessionRemoved, but the parent sesshin session lives on — only the
+  // Claude conversation underneath has changed. Pending approvals tied to
+  // the OUTGOING child cannot be answered (Claude won't reuse the old
+  // toolUseIds), so we cancel them with reason=child-session-changed.
+  const onClaudeSessionBoundary = (id: string): void => {
+    for (const a of approvals.pendingForSession(id)) {
+      pendingHandlers.delete(a.requestId);
+      pendingUpdatedInput.delete(a.requestId);
+      pendingUpdatedPermissions.delete(a.requestId);
+      getWs()?.broadcast({
+        type: 'session.prompt-request.resolved',
+        sessionId: id, requestId: a.requestId,
+        reason: 'child-session-changed', resolvedBy: null,
+      });
+    }
+    approvals.cancelForSession(id);
+  };
+
   return {
     restDeps: {
       onApprovalsCleanedUp,
-      onPreToolUseApproval,
       onPermissionRequestApproval,
       historyForSession: (sid, n) => historyStore.get(sid, n),
     },
@@ -411,6 +331,118 @@ export function createApprovalAdapters(opts: {
       onPromptResponse,
     },
     onSessionRemoved,
+    onClaudeSessionBoundary,
+  };
+}
+
+/**
+ * Phase B4: detect Claude-session boundary on each hook event.
+ *
+ * SessionStart with raw.session_id !== current claudeSessionId means /clear,
+ * --resume, or fresh startup (compact reuses the same id and is naturally
+ * excluded). On boundary:
+ *   1. Cancel pending approvals tied to the outgoing child via
+ *      onClaudeSessionBoundary.
+ *   2. Reset child-scoped registry state (file cursor, last summary).
+ *   3. Update claudeSessionId to the new value.
+ *   4. Broadcast session.child-changed with reason derived from raw.source.
+ *
+ * SessionEnd clears claudeSessionId (when currently set) and broadcasts
+ * session.child-changed with claudeSessionId=null and reason='session-end'.
+ *
+ * The optional onTranscriptPathChanged callback is invoked AFTER boundary
+ * detection when SessionStart delivers a new raw.transcript_path that
+ * differs from the registry's stored sessionFilePath. startHub uses this
+ * to restart the JSONL tail.
+ */
+export function createHookEventInterceptor(deps: {
+  registry: SessionRegistry;
+  getWs:    () => WsServerInstance | undefined;
+  onClaudeSessionBoundary: (sessionId: string) => void;
+  onTranscriptPathChanged?: (sessionId: string, newPath: string) => void;
+  inner:    (env: HookEnvelope) => void;
+}): (env: HookEnvelope) => void {
+  const { registry, getWs, onClaudeSessionBoundary, onTranscriptPathChanged, inner } = deps;
+
+  return (env: HookEnvelope): void => {
+    // Phase B4: detect Claude-session boundary. Claude's session_id rides
+    // in env.raw.session_id. A change vs. the current claudeSessionId means
+    // /clear, --resume, or fresh startup — /compact reuses the same id and
+    // is naturally excluded by the equality check.
+    if (env.event === 'SessionStart' && typeof env.raw['session_id'] === 'string') {
+      const newClaudeId = env.raw['session_id'] as string;
+      const rec = registry.get(env.sessionId);
+      const prevClaudeId = rec?.claudeSessionId ?? null;
+      if (rec && prevClaudeId !== newClaudeId) {
+        // Boundary. Cancel any pending approvals tied to the OUTGOING child
+        // before mutating registry state — same shape as onSessionRemoved.
+        onClaudeSessionBoundary(env.sessionId);
+
+        // Reset child-scoped state (file cursor, lastSummaryId). Note:
+        // sessionFilePath is left to the transcript-path fixup below;
+        // setSessionFilePath also zeroes fileTailCursor when the path
+        // actually changes, so the cursor reset here is redundant in the
+        // common case but harmless.
+        registry.resetChildScopedState(env.sessionId);
+        if (registry.setClaudeSessionId(env.sessionId, newClaudeId)) {
+          const rawSource = env.raw['source'];
+          const reason: 'startup' | 'clear' | 'resume' | 'unknown' =
+            rawSource === 'startup' || rawSource === 'clear' || rawSource === 'resume'
+              ? rawSource
+              : 'unknown';
+          getWs()?.broadcast({
+            type: 'session.child-changed',
+            sessionId:               env.sessionId,
+            previousClaudeSessionId: prevClaudeId,
+            claudeSessionId:         newClaudeId,
+            reason,
+          });
+        } else {
+          log.warn(
+            { sessionId: env.sessionId, newClaudeId },
+            'boundary detected but setClaudeSessionId returned false — skipping broadcast',
+          );
+        }
+      }
+    }
+
+    // Existing transcript-path fixup. Runs AFTER boundary detection so the
+    // new path is associated with the new child id. setSessionFilePath only
+    // returns true if the path actually changed; on change we restart the
+    // tail via the caller-provided callback.
+    if (env.event === 'SessionStart' && typeof env.raw['transcript_path'] === 'string') {
+      const tp = env.raw['transcript_path'] as string;
+      if (registry.setSessionFilePath(env.sessionId, tp)) {
+        log.info({ sessionId: env.sessionId, transcriptPath: tp }, 'updated sessionFilePath from SessionStart');
+        onTranscriptPathChanged?.(env.sessionId, tp);
+      }
+    }
+
+    // Phase B4: SessionEnd closes the current Claude child. Any pending
+    // approvals tied to that child are now dead (Claude won't reuse the
+    // tool_use_id in a later child session), so resolve them immediately,
+    // reset child-scoped state, then clear claudeSessionId and broadcast.
+    if (env.event === 'SessionEnd') {
+      const rec = registry.get(env.sessionId);
+      const prev = rec?.claudeSessionId ?? null;
+      if (prev !== null) {
+        onClaudeSessionBoundary(env.sessionId);
+        registry.resetChildScopedState(env.sessionId);
+      }
+      if (prev !== null && registry.clearClaudeSessionId(env.sessionId)) {
+        getWs()?.broadcast({
+          type: 'session.child-changed',
+          sessionId:               env.sessionId,
+          previousClaudeSessionId: prev,
+          claudeSessionId:         null,
+          reason:                  'session-end',
+        });
+      }
+    }
+    // Intentionally last: downstream observers wired through inner() (state-machine
+    // applier, JSONL mode tracker, etc.) read the post-boundary registry snapshot,
+    // so the boundary work above must complete before they fire.
+    inner(env);
   };
 }
 
@@ -489,19 +521,6 @@ export async function startHub(): Promise<HubInstance> {
       initialCursor: s.fileTailCursor,
     }));
   };
-  const onHookEvent: typeof innerHookEvent = (env) => {
-    if (env.event === 'SessionStart' && typeof env.raw['transcript_path'] === 'string') {
-      const tp = env.raw['transcript_path'] as string;
-      if (registry.setSessionFilePath(env.sessionId, tp)) {
-        log.info({ sessionId: env.sessionId, transcriptPath: tp }, 'updated sessionFilePath from SessionStart');
-        stopTails.get(env.sessionId)?.();
-        stopTails.delete(env.sessionId);
-        startTail(env.sessionId);
-      }
-    }
-    innerHookEvent(env);
-  };
-
   registry.on('session-added', (info) => startTail(info.id));
   registry.on('session-removed', (id) => {
     stopTails.get(id)?.();
@@ -511,21 +530,35 @@ export async function startHub(): Promise<HubInstance> {
   });
   for (const s of registry.list()) startTail(s.id);
 
-  // Remote approval flow (Path B): when a PreToolUse hook arrives we hold
-  // the hook handler's HTTP response until either a client posts a
-  // prompt-response over WS, or our internal timeout falls back to
-  // "ask" so claude's TUI prompt takes over on the laptop.
+  // Remote approval flow: when a PermissionRequest HTTP hook arrives we
+  // hold the hook handler's HTTP response until either a client posts a
+  // prompt-response over WS, or our internal timeout falls back so
+  // claude's TUI prompt takes over on the laptop.
   const approvals = new ApprovalManager({
     defaultTimeoutMs: Number(process.env['SESSHIN_APPROVAL_TIMEOUT_MS'] ?? 60_000),
   });
-  const approvalGate = parsePolicy(process.env['SESSHIN_APPROVAL_GATE']);
-  log.info({ approvalGate }, 'PreToolUse approval gate policy');
 
   // Forward declaration so adapters' getWs closure can reach the WS server,
   // which is constructed AFTER the REST server (matches today's wsRef pattern).
   let wsRef: WsServerInstance | undefined;
   const adapters = createApprovalAdapters({
-    registry, approvals, approvalGate, getWs: () => wsRef,
+    registry, approvals, getWs: () => wsRef,
+  });
+
+  // Phase B4: wrap the inner hook handler with boundary detection +
+  // transcript-path fixup. Built here (after createApprovalAdapters) so it
+  // can reference adapters.onClaudeSessionBoundary; built BEFORE
+  // createRestServer so the wrapped handler is the one captured by REST.
+  const onHookEvent = createHookEventInterceptor({
+    registry,
+    getWs: () => wsRef,
+    onClaudeSessionBoundary: adapters.onClaudeSessionBoundary,
+    onTranscriptPathChanged: (id) => {
+      stopTails.get(id)?.();
+      stopTails.delete(id);
+      startTail(id);
+    },
+    inner: innerHookEvent,
   });
 
   // REST server
