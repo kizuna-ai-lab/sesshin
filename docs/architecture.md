@@ -242,43 +242,69 @@ working hub.
 
 ## v1.5 — Ambient remote control
 
-See `docs/superpowers/specs/2026-05-03-ambient-remote-control-v1.5-design.md`
-for the design of mode-aware approval gating, the unified
-`session.prompt-request` wire shape (claude's `PromptRequest` shape
-forwarded verbatim), and the per-tool interaction handler registry.
+The v1.5 design baseline lives in
+`docs/superpowers/specs/2026-05-03-ambient-remote-control-v1.5-design.md`
+and introduced mode-aware approval, the unified `session.prompt-request`
+wire shape (claude's `PermissionRequest` shape forwarded verbatim), and
+the per-tool interaction handler registry. v1.6 (the cleanup that
+produced this revision of the doc) consolidated approval onto a single
+path; what follows describes the post-cleanup architecture.
 
-Key v1.5 components:
+Key components:
+
+- **Single approval path** — Claude's `PermissionRequest` HTTP hook is
+  the only approval gate. Claude POSTs to `/permission/:sessionId` on
+  the hub's internal REST; the hub dispatches to the per-tool handler
+  registry, awaits a remote decision over the WS protocol, and replies
+  with the `{behavior: 'allow'|'deny', ...}` shape Claude expects.
+  Sesshin no longer maintains its own parallel rule list or a
+  `PreToolUse` adapter — claude's own permission system (settings.json
+  plus session-scope rules) determines whether a tool fires
+  `PermissionRequest` at all.
+
+- **Subagent-aware fallback** — `PermissionRequest` payloads carry
+  `agent_id` when the call originates inside a Task subagent.
+  Subagents run headless in Claude with no TUI fallback, so the hub
+  fail-closes with a diagnostic deny on dispatch error or
+  null-passthrough. Main-thread calls fail-open with HTTP 204 so
+  Claude's TUI can take over. The same logic applies when no remote
+  approver is wired at all.
+
+- **Parent vs child Claude session** — sesshin tracks both its own
+  process-lifetime session id (parent) and Claude's own `session_id`
+  (child, which changes on `/clear`, `--resume`, and startup but stays
+  stable on `/compact`). State ownership and boundary handling live in
+  `docs/state-machine.md` ("Parent vs child Claude session"); pending
+  approvals are tied to the child id and are cancelled on boundary
+  transitions.
 
 - **Mode tracking** — `Substate.permissionMode` is sourced
-  authoritatively from JSONL `permission-mode` records (Task 1). The
-  CLI seeds an initial mode from `~/.claude/settings.json` and the
-  `--permission-mode` flag (Task 2). The approval gate consults this
-  authoritative mode rather than the lossy hook payload (Task 3).
+  authoritatively from JSONL `permission-mode` records. The CLI seeds
+  an initial mode from `~/.claude/settings.json` and the
+  `--permission-mode` flag.
 
 - **Per-tool handler registry**
   (`packages/hub/src/agents/claude/tool-handlers/`) — Bash, FileEdit,
   WebFetch, AskUserQuestion, ExitPlanMode, and a catch-all handler each
   translate a tool's `tool_input` into a wire-uniform
   `{questions, options}` shape and translate user answers back into a
-  hook decision with optional `updatedInput` and `sessionAllowAdd`
-  (Task 5).
-
-- **Permission rules** — port of claude's rule format (`Tool` /
-  `Tool(content)` with `:*` prefix wildcard for Bash and `/*` glob for
-  file/url tools). The approval gate consults the merged
-  `claudeAllowRules ∪ sessionAllowList` before falling through to the
-  gated-tool check (Task 6).
+  hook decision with optional `updatedInput` and `updatedPermissions`.
+  The `updatedPermissions` field carries `addRules` and `setMode`
+  entries that Claude persists into its own session-scope settings, so
+  trust ("always allow this command") flows through Claude's rule
+  system rather than a sesshin-local list.
 
 - **Subscribed-client gating** — the hub tracks per-session count of
-  `actions`-capable clients. Gate returns false when zero clients are
-  attached (sesshin transparent → claude TUI native flow). Last-disconnect
-  releases pending approvals as `'ask'` so claude's TUI takes over
-  (Task 7).
+  `actions`-capable clients. When zero such clients are subscribed, the
+  WS adapter returns `null` from `onPermissionRequestApproval`, the
+  REST handler replies 204, and Claude's TUI handles approval natively.
+  Last-disconnect releases any pending approvals the same way so the
+  TUI can take over.
 
 - **REST diagnostics + CLI subcommands** — `/api/diagnostics`,
-  `/api/sessions/:id/{clients,history,trust,gate,pin,quiet}` and matching
-  `sesshin status / clients / history / trust / gate / pin / quiet`
-  subcommands (Tasks 9, 11).
+  `/api/sessions/:id/{clients,history,gate,pin,quiet}` and matching
+  `sesshin status / clients / history / gate / pin / quiet`
+  subcommands.
 
 - **Slash commands** — bundled `.md` files installed via
-  `sesshin commands install` (Tasks 10, 11).
+  `sesshin commands install`.
