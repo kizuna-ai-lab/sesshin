@@ -160,10 +160,30 @@ but worth calling out in the PR description.
 
 ## Test file: `packages/hub/src/wire.test.ts` (replace wholesale)
 
+### Why a broadcast spy
+
+`session.prompt-request.resolved` is filtered by the WS server on both
+capability (`'actions'`) AND session subscription
+(`ws/server.ts:147–148`). For broadcast point #5
+(`cancelled-no-clients`), the trigger fires precisely when the last
+actions-cap subscribed client leaves — by construction there's no
+real client left to observe the frame. A real-WS-client-only fixture
+can't test #5.
+
+The fix: wrap `ws.broadcast` with a spy in the fixture. The spy
+captures every frame `wire.ts` *intends to emit*, regardless of who
+would receive it. This matches the issue author's "broadcast spy via
+the existing `wsRef`" wording and is exactly the regression surface
+the issue cares about: `resolvedBy` assignments in wire.ts call sites.
+
+The actual capability/subscription filtering is the WS server's
+concern and is already covered in `ws/connection.test.ts`. We do not
+re-test it here.
+
 ### Fixture (`beforeEach`)
 
 Mirrors `connection.test.ts` for the WS half, layers on a real REST
-server and the factory:
+server, the factory, and a broadcast spy:
 
 ```ts
 registry  = new SessionRegistry();
@@ -187,6 +207,16 @@ ws   = createWsServer({
   onInput:    async () => ({ ok: true }),
   ...adapters.wsDeps,
 });
+
+// Wrap broadcast with a spy. Captures every frame wire.ts emits even
+// when no client would receive it (capability/subscription filtered).
+broadcasts = [];
+const realBroadcast = ws.broadcast.bind(ws);
+ws.broadcast = (msg: object, filter?) => {
+  broadcasts.push(msg);
+  realBroadcast(msg, filter);
+};
+
 wsRef = ws;
 registry.on('session-removed', adapters.onSessionRemoved);
 
@@ -194,28 +224,32 @@ await rest.listen(0, '127.0.0.1');
 await ws.listen(0, '127.0.0.1');
 ```
 
-Test helpers (`connectClient`, `collectFrames`, `waitFor`) are copied
-from `connection.test.ts` (no shared util module added — these
-helpers are short and the duplication is contained to two files).
+(If `ws.broadcast` is read-only on the type, an alternative seam is to
+inject a wrapping `WsServerInstance` proxy into `getWs`. Implementation
+detail — pick whichever is least invasive.)
 
-A small `expectResolvedFrame(frames, { requestId, reason, resolvedBy })`
-helper inside the test file keeps the six assertions tight.
+A small `findResolvedFrame(broadcasts, requestId)` helper plus an
+`expectResolvedFrame(frame, { reason, resolvedBy })` keep the six
+assertions tight. `waitFor` polls `broadcasts` for the expected frame
+to appear (matches `connection.test.ts:75–78`'s pattern).
+
+Real WS clients are still used for triggers that require a client
+(tests #1 and #5). Tests #2/#3/#4/#6 trigger via REST or registry
+events and only need the spy.
 
 ### The six tests
 
-Each test connects an actions-cap subscribed WS client, opens an
-approval (or drives a hook that opens one), triggers the path, and
-asserts the resolved frame carries the expected `reason` AND
-`resolvedBy`.
+Each test triggers the corresponding path and asserts the captured
+frame carries the expected `reason` AND `resolvedBy`.
 
-| # | `it(...)` | Trigger |
-|---|---|---|
-| 1 | `decided → remote-adapter:<kind>` | `approvals.open` directly; client sends `prompt-response` over WS — exercises `adapters.wsDeps.onPromptResponse`. Asserts `resolvedBy === 'remote-adapter:debug-web'` (matches the kind sent in `client.identify`). |
-| 2 | `cancelled-tool-completed → hub-stale-cleanup` | `approvals.open` with `toolUseId: 'tu_x'`; POST to `/hooks` PostToolUse with matching `tool_use_id`. The REST handler invokes `adapters.restDeps.onApprovalsCleanedUp` which fires the broadcast. |
-| 3 | `timeout (PreToolUse) → null` | Register session; POST to `/hooks` PreToolUse so `onPreToolUseApproval` calls `approvals.open` with `onExpire`. With the 50ms fixture timeout, expiry fires within ~100ms. |
-| 4 | `timeout (PermissionRequest) → null` | Same shape as #3 but POST to `/permission/:sid`. Asserts the expiry broadcast from the PermissionRequest path specifically. |
-| 5 | `cancelled-no-clients → null` | Open approval directly; the lone subscribed actions-cap client `client.close()`s. WS server's actions-counter hits zero, `adapters.wsDeps.onLastActionsClientGone` fires. Use a *second* state-only client to receive the broadcast (since the first is the one that left). |
-| 6 | `session-ended → null` | Open approval; subscribe a state-cap client; call `registry.remove(sid)`. Registry emits `session-removed`, `adapters.onSessionRemoved` fires the broadcast. |
+| # | `it(...)` | Trigger | Needs real WS client? |
+|---|---|---|---|
+| 1 | `decided → remote-adapter:<kind>` | `approvals.open` directly; an actions-cap subscribed client sends `prompt-response`. Asserts `resolvedBy === 'remote-adapter:debug-web'` (matches the kind sent in `client.identify`). | yes |
+| 2 | `cancelled-tool-completed → hub-stale-cleanup` | `approvals.open` with `toolUseId: 'tu_x'`; POST to `/hooks` PostToolUse with matching `tool_use_id`. | no |
+| 3 | `timeout (PreToolUse) → null` | Register session; POST to `/hooks` PreToolUse so `onPreToolUseApproval` calls `approvals.open` with `onExpire`. With the 50ms fixture timeout, expiry fires within ~100ms. | no |
+| 4 | `timeout (PermissionRequest) → null` | Same shape as #3 but POST to `/permission/:sid`. Asserts the expiry broadcast from the PermissionRequest path specifically. | no |
+| 5 | `cancelled-no-clients → null` | Open approval directly; an actions-cap subscribed client `client.close()`s. WS server's per-session actions-count hits zero, `adapters.wsDeps.onLastActionsClientGone` fires. Spy observes the frame. | yes (the one that closes) |
+| 6 | `session-ended → null` | Open approval; call `registry.remove(sid)`. Registry emits `session-removed`, `adapters.onSessionRemoved` fires the broadcast. | no |
 
 A seventh sanity test asserts the factory contract shape (`restDeps`
 and `wsDeps` keys exist) — guards against accidental contract drift
@@ -256,10 +290,9 @@ during future refactors.
   with `waitFor` polling rather than fixed `setTimeout`. Existing tests
   already use 10–50ms timeouts (e.g., `connection.test.ts:286,288`)
   without flakes.
-- **`onLastActionsClientGone` race.** Test must `await waitFor(...)` on
-  the resolved frame on the *second* (state-only) client, not poll for
-  a fixed delay. WS server fires the callback inside the close handler
-  on the first client.
+- **`onLastActionsClientGone` race.** WS server fires the callback
+  inside the client-close handler. Test must `await waitFor(...)` for
+  the spy to capture the resolved frame, not poll on a fixed delay.
 - **Factory extraction touches a busy file.** The diff is mechanical
   (move bodies into a closure, add an opts plumbing layer) but spans
   ~250 lines. Reviewer should diff the moved bodies side-by-side to
