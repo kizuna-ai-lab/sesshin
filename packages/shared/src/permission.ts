@@ -68,5 +68,7 @@ export const PermissionRequestBody = z.object({
   transcript_path:   z.string().optional(),
   permission_mode:   z.string().optional(),
   model:             z.string().optional(),
+  agent_id:          z.string().optional(),
+  agent_type:        z.string().optional(),
 });
 export type PermissionRequestBody = z.infer<typeof PermissionRequestBody>;

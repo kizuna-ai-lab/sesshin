@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PermissionRequestDecision, PermissionUpdate } from './permission.js';
+import { PermissionRequestBody, PermissionRequestDecision, PermissionUpdate } from './permission.js';
 
 describe('PermissionUpdate schema', () => {
   it('accepts setMode with valid destination + mode', () => {
@@ -61,5 +61,34 @@ describe('PermissionRequestDecision.allow with updatedPermissions', () => {
       updatedPermissions: [{ type: 'setMode', destination: 'session', mode: 'wat' }],
     });
     expect(r.success).toBe(false);
+  });
+});
+
+describe('PermissionRequestBody.agent_id / agent_type', () => {
+  it('parses agent_id and agent_type when present (subagent)', () => {
+    const r = PermissionRequestBody.safeParse({
+      session_id: 'cc-1',
+      hook_event_name: 'PermissionRequest',
+      tool_name: 'Bash',
+      tool_input: { command: 'ls' },
+      agent_id: 'sub-abc',
+      agent_type: 'general-purpose',
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.agent_id).toBe('sub-abc');
+      expect(r.data.agent_type).toBe('general-purpose');
+    }
+  });
+
+  it('parses without agent_id (main thread)', () => {
+    const r = PermissionRequestBody.safeParse({
+      session_id: 'cc-1',
+      hook_event_name: 'PermissionRequest',
+      tool_name: 'Bash',
+      tool_input: { command: 'ls' },
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.agent_id).toBeUndefined();
   });
 });
