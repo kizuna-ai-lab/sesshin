@@ -242,4 +242,78 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
     expect(frame.resolvedBy).toBe('hub-stale-cleanup');
     expect(frame.sessionId).toBe(sid);
   });
+
+  it('timeout (PreToolUse) → resolvedBy = null', async () => {
+    // Tear down the fixture-default 1000ms hub.
+    await rest.close();
+    await ws.close();
+
+    // Rebuild with a fast 30ms approval timeout so onExpire fires quickly.
+    registry  = new SessionRegistry();
+    approvals = new ApprovalManager({ defaultTimeoutMs: 30 });
+    let wsRef: WsServerInstance | undefined;
+    const adapters = createApprovalAdapters({
+      registry, approvals,
+      approvalGate: parsePolicy('always'),
+      getWs: () => wsRef,
+    });
+    rest = createRestServer({ registry, approvals, ...adapters.restDeps });
+    ws   = createWsServer({
+      registry,
+      bus:        new EventBus(),
+      tap:        new PtyTap({ ringBytes: 1024 }),
+      staticDir:  null,
+      approvals,
+      onInput:    async () => ({ ok: true }),
+      ...adapters.wsDeps,
+    });
+    broadcasts = [];
+    const realBroadcast = ws.broadcast.bind(ws);
+    ws.broadcast = (msg: object, filter?: (caps: string[]) => boolean): void => {
+      broadcasts.push(msg);
+      realBroadcast(msg, filter);
+    };
+    wsRef = ws;
+    registry.on('session-removed', adapters.onSessionRemoved);
+    await rest.listen(0, '127.0.0.1');
+    await ws.listen(0, '127.0.0.1');
+    restPort = rest.address().port;
+    wsPort   = ws.address().port;
+
+    // ---- Now drive the test ----
+    const sid = registerSession();
+
+    // Don't await — the hook handler hangs until approval resolves
+    // (decided / timeout / etc). We're testing the timeout path, so it
+    // resolves via onExpire ~30ms later.
+    const reqPromise = fetch(`http://127.0.0.1:${restPort}/hooks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        agent: 'claude-code', sessionId: sid, ts: Date.now(), event: 'PreToolUse',
+        raw: {
+          nativeEvent: 'PreToolUse', tool_name: 'Bash',
+          tool_input: { command: 'ls' },
+        },
+      }),
+    });
+
+    // Wait for approvals.open to register a pending entry, then for the
+    // timeout broadcast to fire.
+    await waitFor(() => approvals.pendingForSession(sid).length === 1);
+    const pending = approvals.pendingForSession(sid)[0]!;
+
+    await waitFor(
+      () => findResolvedFrame(pending.requestId) !== undefined,
+      /* timeoutMs */ 500,
+    );
+    const frame = findResolvedFrame(pending.requestId)!;
+    expect(frame.reason).toBe('timeout');
+    expect(frame.resolvedBy).toBeNull();
+    expect(frame.sessionId).toBe(sid);
+
+    // Drain the hanging request — its body is the resulting decision.
+    const r = await reqPromise;
+    expect(r.status).toBe(200);
+  });
 });
