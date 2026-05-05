@@ -408,4 +408,20 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
     // (passthrough → 204). Some configs surface as 200; allow either.
     expect([200, 204]).toContain(r.status);
   });
+
+  it('session-ended → resolvedBy = null', async () => {
+    const sid = registerSession();
+    const { request } = approvals.open({
+      sessionId: sid, tool: 'Bash', toolInput: { command: 'ls' },
+      origin: 'permission', questions: [],
+    });
+
+    registry.unregister(sid);
+
+    await waitFor(() => findResolvedFrame(request.requestId) !== undefined);
+    const frame = findResolvedFrame(request.requestId)!;
+    expect(frame.reason).toBe('session-ended');
+    expect(frame.resolvedBy).toBeNull();
+    expect(frame.sessionId).toBe(sid);
+  });
 });
