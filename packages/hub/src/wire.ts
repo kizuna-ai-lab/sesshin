@@ -14,8 +14,8 @@ import { wireStateMachine } from './state-machine/applier.js';
 import { Dedup } from './observers/dedup.js';
 import { PtyTap } from './observers/pty-tap.js';
 import { tailSessionFile } from './observers/session-file-tail.js';
-import { createRestServer, type RestServer } from './rest/server.js';
-import { createWsServer, type WsServerInstance } from './ws/server.js';
+import { createRestServer, type RestServer, type RestServerDeps } from './rest/server.js';
+import { createWsServer, type WsServerInstance, type WsServerDeps } from './ws/server.js';
 import { InputBridge } from './input-bridge.js';
 import { Summarizer } from './summarizer/index.js';
 import { runModeBPrime } from './summarizer/mode-b-prime.js';
@@ -26,6 +26,8 @@ import { parsePolicy, shouldGatePreToolUse } from './agents/claude/approval-poli
 import { getHandler, setCatchAllToolName } from './agents/claude/tool-handlers/registry.js';
 import type { ToolHandler, HandlerCtx } from './agents/claude/tool-handlers/types.js';
 import type { PermissionUpdate } from '@sesshin/shared';
+import type { HistoryEntry } from './rest/diagnostics.js';
+import type { ApprovalGatePolicy } from './agents/claude/approval-policy.js';
 
 interface PendingHandlerSlot {
   handler:   ToolHandler;
@@ -33,31 +35,383 @@ interface PendingHandlerSlot {
   toolInput: Record<string, unknown>;
   tool:      string;
 }
-const pendingHandlers = new Map<string, PendingHandlerSlot>();
-const pendingUpdatedInput = new Map<string, Record<string, unknown>>();
-// Mirror of pendingUpdatedInput for the PermissionRequest `updatedPermissions`
-// field. Populated by onPromptResponse from the handler's decide() output, read
-// by onPermissionRequestApproval when assembling the wire response. Only used
-// today by ExitPlanMode (setMode→default vs setMode→acceptEdits).
-const pendingUpdatedPermissions = new Map<string, PermissionUpdate[]>();
 
-// Per-session ring of resolved prompt-request decisions. Capped at 100 per
-// session, returned newest-first via historyStore.get(sid, n).
-const historyStore = (() => {
-  const map = new Map<string, import('./rest/diagnostics.js').HistoryEntry[]>();
-  return {
-    push(sid: string, e: import('./rest/diagnostics.js').HistoryEntry): void {
-      const arr = map.get(sid) ?? [];
-      arr.push(e);
-      if (arr.length > 100) arr.shift();
-      map.set(sid, arr);
-    },
-    get(sid: string, n: number): import('./rest/diagnostics.js').HistoryEntry[] {
-      // .slice creates a copy; .reverse() must not mutate the stored array.
-      return (map.get(sid) ?? []).slice(-n).reverse();
-    },
+export interface ApprovalAdapters {
+  restDeps: {
+    onApprovalsCleanedUp:        NonNullable<RestServerDeps['onApprovalsCleanedUp']>;
+    onPreToolUseApproval:        NonNullable<RestServerDeps['onPreToolUseApproval']>;
+    onPermissionRequestApproval: NonNullable<RestServerDeps['onPermissionRequestApproval']>;
+    historyForSession:           NonNullable<RestServerDeps['historyForSession']>;
   };
-})();
+  wsDeps: {
+    onLastActionsClientGone: NonNullable<WsServerDeps['onLastActionsClientGone']>;
+    onPromptResponse:        NonNullable<WsServerDeps['onPromptResponse']>;
+  };
+  onSessionRemoved: (sessionId: string) => void;
+}
+
+export function createApprovalAdapters(opts: {
+  registry:     SessionRegistry;
+  approvals:    ApprovalManager;
+  approvalGate: ApprovalGatePolicy;
+  getWs:        () => WsServerInstance | undefined;
+}): ApprovalAdapters {
+  const { registry, approvals, approvalGate, getWs } = opts;
+
+  // Per-request state — moved from module scope (was wire.ts:36–42).
+  const pendingHandlers          = new Map<string, PendingHandlerSlot>();
+  const pendingUpdatedInput      = new Map<string, Record<string, unknown>>();
+  // Mirror of pendingUpdatedInput for the PermissionRequest `updatedPermissions`
+  // field. Populated by onPromptResponse from the handler's decide() output, read
+  // by onPermissionRequestApproval when assembling the wire response. Only used
+  // today by ExitPlanMode (setMode→default vs setMode→acceptEdits).
+  const pendingUpdatedPermissions = new Map<string, PermissionUpdate[]>();
+
+  // Per-session ring of resolved decisions — moved from module scope
+  // (was wire.ts:46–60). Capped at 100 per session, newest-first via .get().
+  const historyStore = (() => {
+    const map = new Map<string, HistoryEntry[]>();
+    return {
+      push(sid: string, e: HistoryEntry): void {
+        const arr = map.get(sid) ?? [];
+        arr.push(e);
+        if (arr.length > 100) arr.shift();
+        map.set(sid, arr);
+      },
+      get(sid: string, n: number): HistoryEntry[] {
+        // .slice creates a copy; .reverse() must not mutate the stored array.
+        return (map.get(sid) ?? []).slice(-n).reverse();
+      },
+    };
+  })();
+
+  // ---- callbacks below: bodies copied verbatim from wire.ts, with two
+  //      mechanical substitutions:
+  //        wsRef?.broadcast(...) → getWs()?.broadcast(...)
+  //        ws.broadcast(...)     → getWs()?.broadcast(...)  (in onPromptResponse)
+  //      Everything else unchanged.
+
+  const onApprovalsCleanedUp: ApprovalAdapters['restDeps']['onApprovalsCleanedUp'] =
+    (sessionId, requestIds) => {
+      // The stale-cleanup path in rest/server.ts just resolved one or more
+      // pending approvals because PostToolUse / Stop arrived for a tool whose
+      // approval was still open (typical scenario: PreToolUse timed out →
+      // sesshin returned ask → CC fired PermissionRequest → user picked in
+      // CC's TUI before answering on the remote → tool ran while sesshin's
+      // PermissionRequest long-poll was still hanging). Clean up the per-
+      // request maps and tell remote clients the prompt is no longer live so
+      // the awaiting card disappears.
+      for (const rid of requestIds) {
+        pendingHandlers.delete(rid);
+        pendingUpdatedInput.delete(rid);
+        pendingUpdatedPermissions.delete(rid);
+        getWs()?.broadcast({
+          type: 'session.prompt-request.resolved',
+          sessionId, requestId: rid, reason: 'cancelled-tool-completed',
+          resolvedBy: 'hub-stale-cleanup',
+        });
+      }
+    };
+
+  const onPreToolUseApproval: ApprovalAdapters['restDeps']['onPreToolUseApproval'] =
+    async (env) => {
+      // Mode-aware gating: when claude wouldn't have prompted on its own
+      // (auto / acceptEdits / bypassPermissions / read-only tool), return
+      // null so the REST layer responds 204 and the hook handler stays
+      // silent. Claude then follows its normal mode logic and the user
+      // sees no extra prompts.
+      const session = registry.get(env.sessionId);
+      const knownMode = session?.substate.permissionMode;
+      // Per-session gate override (set via /sesshin-gate or POST /api/sessions/:id/gate)
+      // takes precedence over the env-level SESSHIN_APPROVAL_GATE policy.
+      const sessionPolicy = registry.getSessionGateOverride(env.sessionId);
+      const policyForCall = sessionPolicy ?? approvalGate;
+      // hasSubscribedClient: stay transparent when no actions-capable client
+      // is currently subscribed to this session. Hook handler returns 204 →
+      // claude follows its native permission logic instead of waiting on a
+      // ghost remote.
+      const hasSubscribedClient = getWs()?.hasSubscribedActionsClient(env.sessionId) ?? false;
+      // Once a PermissionRequest HTTP hook has been observed for this session,
+      // PreToolUse short-circuits: the real gate is somewhere else. Stops us
+      // from double-gating the same tool call.
+      const usesPR = registry.get(env.sessionId)?.usesPermissionRequest === true;
+      if (!shouldGatePreToolUse(env.raw, knownMode, policyForCall, {
+        sessionAllowList: session?.sessionAllowList ?? [],
+        claudeAllowRules: session?.claudeAllowRules ?? [],
+      }, hasSubscribedClient, usesPR)) return null;
+      const tool = typeof env.raw['tool_name'] === 'string' ? env.raw['tool_name'] : 'unknown';
+      const rawInput = env.raw['tool_input'];
+      const toolInput: Record<string, unknown> =
+        rawInput !== null && typeof rawInput === 'object'
+          ? (rawInput as Record<string, unknown>)
+          : {};
+      const toolUseId = typeof env.raw['tool_use_id'] === 'string' ? env.raw['tool_use_id'] : undefined;
+
+      setCatchAllToolName(tool);
+      const handler = getHandler(tool);
+      const ctx: HandlerCtx = {
+        permissionMode: knownMode ?? 'default',
+        cwd: session?.cwd ?? process.cwd(),
+        sessionAllowList: session?.sessionAllowList ?? [],
+      };
+      const rendered = handler.render(toolInput, ctx);
+
+      const { request, decision } = approvals.open({
+        sessionId: env.sessionId, tool, toolInput,
+        ...(toolUseId !== undefined ? { toolUseId } : {}),
+        onExpire: (a) => {
+          getWs()?.broadcast({
+            type: 'session.prompt-request.resolved',
+            sessionId: a.sessionId, requestId: a.requestId, reason: 'timeout',
+            resolvedBy: null,
+          });
+        },
+        origin: rendered.origin ?? 'permission',
+        ...(rendered.body !== undefined ? { body: rendered.body } : {}),
+        questions: rendered.questions,
+      });
+
+      registry.updateState(env.sessionId, 'awaiting-confirmation');
+      getWs()?.broadcast({
+        type: 'session.prompt-request',
+        sessionId: env.sessionId,
+        requestId: request.requestId,
+        origin: rendered.origin ?? 'permission',
+        toolName: tool,
+        ...(toolUseId !== undefined ? { toolUseId } : {}),
+        expiresAt: request.expiresAt,
+        ...(rendered.body !== undefined ? { body: rendered.body } : {}),
+        questions: rendered.questions,
+      });
+
+      pendingHandlers.set(request.requestId, { handler, ctx, toolInput, tool });
+
+      // Use try/finally so pendingHandlers + pendingUpdated{Input,Permissions}
+      // are always cleaned up — including the stale-cleanup, timeout, and
+      // session-end paths where the resolution doesn't come back through
+      // onPromptResponse. Without this, those paths leaked map slots
+      // indefinitely. PreToolUse's wire response doesn't carry
+      // updatedPermissions (that's PermissionRequest-only), but cleanup is
+      // still needed in case the same handler set both fields.
+      let out: import('./approval-manager.js').ApprovalOutcome;
+      let ui: Record<string, unknown> | undefined;
+      try {
+        out = await decision;
+        // Whichever path ended the approval, restore the session to running so
+        // the laptop and remote can keep typing.
+        registry.updateState(env.sessionId, 'running');
+        ui = pendingUpdatedInput.get(request.requestId);
+      } finally {
+        pendingHandlers.delete(request.requestId);
+        pendingUpdatedInput.delete(request.requestId);
+        pendingUpdatedPermissions.delete(request.requestId);
+      }
+      return { ...out, ...(ui ? { updatedInput: ui } : {}) };
+    };
+
+  const onPermissionRequestApproval: ApprovalAdapters['restDeps']['onPermissionRequestApproval'] =
+    async (env) => {
+      // PermissionRequest is Claude Code's authoritative approval gate.
+      // It arrives as an HTTP hook (Claude POSTs the payload directly to
+      // the hub), shape distinct from PreToolUse — no `ask`, decision
+      // is an object {behavior, ...}.
+      const session = registry.get(env.sessionId);
+      const knownMode = session?.substate.permissionMode;
+      const tool = typeof env.raw['tool_name'] === 'string' ? env.raw['tool_name'] : 'unknown';
+      const rawInput = env.raw['tool_input'];
+      const toolInput: Record<string, unknown> =
+        rawInput !== null && typeof rawInput === 'object'
+          ? (rawInput as Record<string, unknown>)
+          : {};
+      const toolUseId = typeof env.raw['tool_use_id'] === 'string' ? env.raw['tool_use_id'] : undefined;
+
+      setCatchAllToolName(tool);
+      const handler = getHandler(tool);
+      const ctx: HandlerCtx = {
+        permissionMode: knownMode ?? 'default',
+        cwd: session?.cwd ?? process.cwd(),
+        sessionAllowList: session?.sessionAllowList ?? [],
+      };
+      const rendered = handler.render(toolInput, ctx);
+
+      const { request, decision } = approvals.open({
+        sessionId: env.sessionId, tool, toolInput,
+        ...(toolUseId !== undefined ? { toolUseId } : {}),
+        onExpire: (a) => {
+          getWs()?.broadcast({
+            type: 'session.prompt-request.resolved',
+            sessionId: a.sessionId, requestId: a.requestId, reason: 'timeout',
+            resolvedBy: null,
+          });
+        },
+        origin: rendered.origin ?? 'permission',
+        ...(rendered.body !== undefined ? { body: rendered.body } : {}),
+        questions: rendered.questions,
+      });
+
+      registry.updateState(env.sessionId, 'awaiting-confirmation');
+      getWs()?.broadcast({
+        type: 'session.prompt-request',
+        sessionId: env.sessionId,
+        requestId: request.requestId,
+        origin: rendered.origin ?? 'permission',
+        toolName: tool,
+        ...(toolUseId !== undefined ? { toolUseId } : {}),
+        expiresAt: request.expiresAt,
+        ...(rendered.body !== undefined ? { body: rendered.body } : {}),
+        questions: rendered.questions,
+      });
+
+      pendingHandlers.set(request.requestId, { handler, ctx, toolInput, tool });
+
+      // Mirror of the PreToolUse adapter's try/finally — guarantees cleanup
+      // on stale-cleanup / timeout / session-end paths too.
+      let out: import('./approval-manager.js').ApprovalOutcome;
+      let ui: Record<string, unknown> | undefined;
+      let up: PermissionUpdate[] | undefined;
+      try {
+        out = await decision;
+        registry.updateState(env.sessionId, 'running');
+        ui = pendingUpdatedInput.get(request.requestId);
+        up = pendingUpdatedPermissions.get(request.requestId);
+      } finally {
+        pendingHandlers.delete(request.requestId);
+        pendingUpdatedInput.delete(request.requestId);
+        pendingUpdatedPermissions.delete(request.requestId);
+      }
+
+      // Map ApprovalOutcome → PermissionRequest decision shape:
+      //   allow → { behavior: 'allow', updatedInput?, updatedPermissions? }
+      //   deny  → { behavior: 'deny', message? } (reason becomes message)
+      //   ask   → null (passthrough; PermissionRequest has no 'ask' kind)
+      if (out.decision === 'allow') {
+        return {
+          behavior: 'allow',
+          ...(ui ? { updatedInput: ui } : {}),
+          ...(up ? { updatedPermissions: up } : {}),
+        };
+      }
+      if (out.decision === 'deny') {
+        return { behavior: 'deny', ...(out.reason !== undefined ? { message: out.reason } : {}) };
+      }
+      return null;
+    };
+
+  const onLastActionsClientGone: ApprovalAdapters['wsDeps']['onLastActionsClientGone'] =
+    (sessionId) => {
+      // The last actions-capable client just unsubscribed/disconnected. Any
+      // pending PreToolUse approval for this session is now waiting on a
+      // ghost. Resolve them as 'ask' immediately so claude's TUI prompt
+      // takes over instead of timing out 60s later.
+      const pending = approvals.pendingForSession(sessionId);
+      if (pending.length === 0) return;
+      // Clean up per-request maps + broadcast resolution BEFORE calling
+      // cancelOnLastClientGone (cancellation removes pending entries, so we
+      // need to capture them first — same pattern as the session-removed
+      // handler below).
+      for (const a of pending) {
+        pendingHandlers.delete(a.requestId);
+        pendingUpdatedInput.delete(a.requestId);
+        pendingUpdatedPermissions.delete(a.requestId);
+        getWs()?.broadcast({
+          type: 'session.prompt-request.resolved',
+          sessionId, requestId: a.requestId, reason: 'cancelled-no-clients',
+          resolvedBy: null,
+        });
+      }
+      approvals.cancelOnLastClientGone(sessionId);
+      log.info({ sessionId, cancelled: pending.length }, 'released pending approvals: last actions-client gone');
+    };
+
+  const onPromptResponse: ApprovalAdapters['wsDeps']['onPromptResponse'] =
+    (sessionId, requestId, answers, clientKind) => {
+      const slot = pendingHandlers.get(requestId);
+      if (!slot) return false;
+      pendingHandlers.delete(requestId);
+      const decision = slot.handler.decide(answers, slot.toolInput, slot.ctx);
+
+      let outcome: { decision: 'allow' | 'deny' | 'ask'; reason?: string };
+      switch (decision.kind) {
+        case 'passthrough':
+          outcome = { decision: 'ask', reason: 'sesshin: handler passthrough' };
+          break;
+        case 'allow':
+          outcome = {
+            decision: 'allow',
+            ...(decision.additionalContext ? { reason: decision.additionalContext } : {}),
+          };
+          break;
+        case 'deny':
+          outcome = {
+            decision: 'deny',
+            ...(decision.additionalContext
+              ? { reason: decision.additionalContext }
+              : decision.reason !== undefined
+                ? { reason: decision.reason }
+                : {}),
+          };
+          break;
+        case 'ask':
+          outcome = { decision: 'ask', ...(decision.reason ? { reason: decision.reason } : {}) };
+          break;
+      }
+
+      if (decision.kind === 'allow' && decision.sessionAllowAdd) {
+        const rec = registry.get(sessionId);
+        if (rec) rec.sessionAllowList.push(decision.sessionAllowAdd);
+      }
+
+      if (decision.kind === 'allow' && decision.updatedInput) {
+        pendingUpdatedInput.set(requestId, decision.updatedInput);
+      }
+      if (decision.kind === 'allow' && decision.updatedPermissions) {
+        pendingUpdatedPermissions.set(requestId, decision.updatedPermissions);
+      }
+
+      const ok = approvals.decide(requestId, outcome);
+      if (ok) {
+        getWs()?.broadcast({
+          type: 'session.prompt-request.resolved',
+          sessionId, requestId, reason: 'decided',
+          resolvedBy: `remote-adapter:${clientKind}`,
+        });
+        historyStore.push(sessionId, {
+          requestId, tool: slot.tool, resolvedAt: Date.now(),
+          decision: outcome.decision,
+          ...(outcome.reason ? { reason: outcome.reason } : {}),
+        });
+      }
+      return ok;
+    };
+
+  const onSessionRemoved = (id: string): void => {
+    for (const a of approvals.pendingForSession(id)) {
+      pendingHandlers.delete(a.requestId);
+      pendingUpdatedInput.delete(a.requestId);
+      pendingUpdatedPermissions.delete(a.requestId);
+      getWs()?.broadcast({
+        type: 'session.prompt-request.resolved',
+        sessionId: id, requestId: a.requestId, reason: 'session-ended',
+        resolvedBy: null,
+      });
+    }
+    approvals.cancelForSession(id);
+  };
+
+  return {
+    restDeps: {
+      onApprovalsCleanedUp,
+      onPreToolUseApproval,
+      onPermissionRequestApproval,
+      historyForSession: historyStore.get,
+    },
+    wsDeps: {
+      onLastActionsClientGone,
+      onPromptResponse,
+    },
+    onSessionRemoved,
+  };
+}
 
 export interface HubInstance {
   rest: RestServer;
@@ -166,341 +520,44 @@ export async function startHub(): Promise<HubInstance> {
   const approvalGate = parsePolicy(process.env['SESSHIN_APPROVAL_GATE']);
   log.info({ approvalGate }, 'PreToolUse approval gate policy');
 
-  // Forward declaration for ws so the REST onPreToolUseApproval closure can
-  // reach the broadcaster. Filled in immediately after createWsServer below.
-  let wsRef: WsServerInstance | null = null;
+  // Forward declaration so adapters' getWs closure can reach the WS server,
+  // which is constructed AFTER the REST server (matches today's wsRef pattern).
+  let wsRef: WsServerInstance | undefined;
+  const adapters = createApprovalAdapters({
+    registry, approvals, approvalGate, getWs: () => wsRef,
+  });
 
   // REST server
   const rest = createRestServer({
     registry, tap, onHookEvent,
     onInjectFromHub: (id, data, source) => bridge.deliver(id, data, source).then((r) => r.ok),
-    onAttachSink: (id, deliver) => { bridge.setSink(id, deliver); },
-    onDetachSink: (id) => { bridge.clearSink(id); },
+    onAttachSink:    (id, deliver) => { bridge.setSink(id, deliver); },
+    onDetachSink:    (id) => { bridge.clearSink(id); },
     approvals,
-    // wsRef lazy: createWsServer runs after createRestServer, so these arrow
-    // closures resolve the ws instance at request-handling time, not at deps
-    // construction time. Same forward-declaration pattern used for
-    // onPreToolUseApproval below.
     hasSubscribedActionsClient: (sid) => wsRef?.hasSubscribedActionsClient(sid) ?? false,
     listClients: (sid) => wsRef?.listClients(sid) ?? [],
-    historyForSession: (sid, n) => historyStore.get(sid, n),
-    onApprovalsCleanedUp: (sessionId, requestIds) => {
-      // The stale-cleanup path in rest/server.ts just resolved one or more
-      // pending approvals because PostToolUse / Stop arrived for a tool whose
-      // approval was still open (typical scenario: PreToolUse timed out →
-      // sesshin returned ask → CC fired PermissionRequest → user picked in
-      // CC's TUI before answering on the remote → tool ran while sesshin's
-      // PermissionRequest long-poll was still hanging). Clean up the per-
-      // request maps and tell remote clients the prompt is no longer live so
-      // the awaiting card disappears.
-      for (const rid of requestIds) {
-        pendingHandlers.delete(rid);
-        pendingUpdatedInput.delete(rid);
-        pendingUpdatedPermissions.delete(rid);
-        wsRef?.broadcast({
-          type: 'session.prompt-request.resolved',
-          sessionId, requestId: rid, reason: 'cancelled-tool-completed',
-          resolvedBy: 'hub-stale-cleanup',
-        });
-      }
-    },
-    onPreToolUseApproval: async (env) => {
-      // Mode-aware gating: when claude wouldn't have prompted on its own
-      // (auto / acceptEdits / bypassPermissions / read-only tool), return
-      // null so the REST layer responds 204 and the hook handler stays
-      // silent. Claude then follows its normal mode logic and the user
-      // sees no extra prompts.
-      const session = registry.get(env.sessionId);
-      const knownMode = session?.substate.permissionMode;
-      // Per-session gate override (set via /sesshin-gate or POST /api/sessions/:id/gate)
-      // takes precedence over the env-level SESSHIN_APPROVAL_GATE policy.
-      const sessionPolicy = registry.getSessionGateOverride(env.sessionId);
-      const policyForCall = sessionPolicy ?? approvalGate;
-      // hasSubscribedClient: stay transparent when no actions-capable client
-      // is currently subscribed to this session. Hook handler returns 204 →
-      // claude follows its native permission logic instead of waiting on a
-      // ghost remote.
-      const hasSubscribedClient = wsRef?.hasSubscribedActionsClient(env.sessionId) ?? false;
-      // Once a PermissionRequest HTTP hook has been observed for this session,
-      // PreToolUse short-circuits: the real gate is somewhere else. Stops us
-      // from double-gating the same tool call.
-      const usesPR = registry.get(env.sessionId)?.usesPermissionRequest === true;
-      if (!shouldGatePreToolUse(env.raw, knownMode, policyForCall, {
-        sessionAllowList: session?.sessionAllowList ?? [],
-        claudeAllowRules: session?.claudeAllowRules ?? [],
-      }, hasSubscribedClient, usesPR)) return null;
-      const tool = typeof env.raw['tool_name'] === 'string' ? env.raw['tool_name'] : 'unknown';
-      const rawInput = env.raw['tool_input'];
-      const toolInput: Record<string, unknown> =
-        rawInput !== null && typeof rawInput === 'object'
-          ? (rawInput as Record<string, unknown>)
-          : {};
-      const toolUseId = typeof env.raw['tool_use_id'] === 'string' ? env.raw['tool_use_id'] : undefined;
-
-      setCatchAllToolName(tool);
-      const handler = getHandler(tool);
-      const ctx: HandlerCtx = {
-        permissionMode: knownMode ?? 'default',
-        cwd: session?.cwd ?? process.cwd(),
-        sessionAllowList: session?.sessionAllowList ?? [],
-      };
-      const rendered = handler.render(toolInput, ctx);
-
-      const { request, decision } = approvals.open({
-        sessionId: env.sessionId, tool, toolInput,
-        ...(toolUseId !== undefined ? { toolUseId } : {}),
-        onExpire: (a) => {
-          wsRef?.broadcast({
-            type: 'session.prompt-request.resolved',
-            sessionId: a.sessionId, requestId: a.requestId, reason: 'timeout',
-            resolvedBy: null,
-          });
-        },
-        origin: rendered.origin ?? 'permission',
-        ...(rendered.body !== undefined ? { body: rendered.body } : {}),
-        questions: rendered.questions,
-      });
-
-      registry.updateState(env.sessionId, 'awaiting-confirmation');
-      wsRef?.broadcast({
-        type: 'session.prompt-request',
-        sessionId: env.sessionId,
-        requestId: request.requestId,
-        origin: rendered.origin ?? 'permission',
-        toolName: tool,
-        ...(toolUseId !== undefined ? { toolUseId } : {}),
-        expiresAt: request.expiresAt,
-        ...(rendered.body !== undefined ? { body: rendered.body } : {}),
-        questions: rendered.questions,
-      });
-
-      pendingHandlers.set(request.requestId, { handler, ctx, toolInput, tool });
-
-      // Use try/finally so pendingHandlers + pendingUpdated{Input,Permissions}
-      // are always cleaned up — including the stale-cleanup, timeout, and
-      // session-end paths where the resolution doesn't come back through
-      // onPromptResponse. Without this, those paths leaked map slots
-      // indefinitely. PreToolUse's wire response doesn't carry
-      // updatedPermissions (that's PermissionRequest-only), but cleanup is
-      // still needed in case the same handler set both fields.
-      let out: import('./approval-manager.js').ApprovalOutcome;
-      let ui: Record<string, unknown> | undefined;
-      try {
-        out = await decision;
-        // Whichever path ended the approval, restore the session to running so
-        // the laptop and remote can keep typing.
-        registry.updateState(env.sessionId, 'running');
-        ui = pendingUpdatedInput.get(request.requestId);
-      } finally {
-        pendingHandlers.delete(request.requestId);
-        pendingUpdatedInput.delete(request.requestId);
-        pendingUpdatedPermissions.delete(request.requestId);
-      }
-      return { ...out, ...(ui ? { updatedInput: ui } : {}) };
-    },
-    onPermissionRequestApproval: async (env) => {
-      // PermissionRequest is Claude Code's authoritative approval gate.
-      // It arrives as an HTTP hook (Claude POSTs the payload directly to
-      // the hub), shape distinct from PreToolUse — no `ask`, decision
-      // is an object {behavior, ...}.
-      const session = registry.get(env.sessionId);
-      const knownMode = session?.substate.permissionMode;
-      const tool = typeof env.raw['tool_name'] === 'string' ? env.raw['tool_name'] : 'unknown';
-      const rawInput = env.raw['tool_input'];
-      const toolInput: Record<string, unknown> =
-        rawInput !== null && typeof rawInput === 'object'
-          ? (rawInput as Record<string, unknown>)
-          : {};
-      const toolUseId = typeof env.raw['tool_use_id'] === 'string' ? env.raw['tool_use_id'] : undefined;
-
-      setCatchAllToolName(tool);
-      const handler = getHandler(tool);
-      const ctx: HandlerCtx = {
-        permissionMode: knownMode ?? 'default',
-        cwd: session?.cwd ?? process.cwd(),
-        sessionAllowList: session?.sessionAllowList ?? [],
-      };
-      const rendered = handler.render(toolInput, ctx);
-
-      const { request, decision } = approvals.open({
-        sessionId: env.sessionId, tool, toolInput,
-        ...(toolUseId !== undefined ? { toolUseId } : {}),
-        onExpire: (a) => {
-          wsRef?.broadcast({
-            type: 'session.prompt-request.resolved',
-            sessionId: a.sessionId, requestId: a.requestId, reason: 'timeout',
-            resolvedBy: null,
-          });
-        },
-        origin: rendered.origin ?? 'permission',
-        ...(rendered.body !== undefined ? { body: rendered.body } : {}),
-        questions: rendered.questions,
-      });
-
-      registry.updateState(env.sessionId, 'awaiting-confirmation');
-      wsRef?.broadcast({
-        type: 'session.prompt-request',
-        sessionId: env.sessionId,
-        requestId: request.requestId,
-        origin: rendered.origin ?? 'permission',
-        toolName: tool,
-        ...(toolUseId !== undefined ? { toolUseId } : {}),
-        expiresAt: request.expiresAt,
-        ...(rendered.body !== undefined ? { body: rendered.body } : {}),
-        questions: rendered.questions,
-      });
-
-      pendingHandlers.set(request.requestId, { handler, ctx, toolInput, tool });
-
-      // Mirror of the PreToolUse adapter's try/finally — guarantees cleanup
-      // on stale-cleanup / timeout / session-end paths too.
-      let out: import('./approval-manager.js').ApprovalOutcome;
-      let ui: Record<string, unknown> | undefined;
-      let up: PermissionUpdate[] | undefined;
-      try {
-        out = await decision;
-        registry.updateState(env.sessionId, 'running');
-        ui = pendingUpdatedInput.get(request.requestId);
-        up = pendingUpdatedPermissions.get(request.requestId);
-      } finally {
-        pendingHandlers.delete(request.requestId);
-        pendingUpdatedInput.delete(request.requestId);
-        pendingUpdatedPermissions.delete(request.requestId);
-      }
-
-      // Map ApprovalOutcome → PermissionRequest decision shape:
-      //   allow → { behavior: 'allow', updatedInput?, updatedPermissions? }
-      //   deny  → { behavior: 'deny', message? } (reason becomes message)
-      //   ask   → null (passthrough; PermissionRequest has no 'ask' kind)
-      if (out.decision === 'allow') {
-        return {
-          behavior: 'allow',
-          ...(ui ? { updatedInput: ui } : {}),
-          ...(up ? { updatedPermissions: up } : {}),
-        };
-      }
-      if (out.decision === 'deny') {
-        return { behavior: 'deny', ...(out.reason !== undefined ? { message: out.reason } : {}) };
-      }
-      return null;
-    },
+    ...adapters.restDeps,
   });
   await rest.listen(config.internalPort, config.internalHost);
   log.info({ port: config.internalPort }, 'hub REST listening');
 
   // WS server
   const __filename = fileURLToPath(import.meta.url);
-  const __dirname = dirname(__filename);
-  const staticDir = join(__dirname, 'web');
+  const __dirname  = dirname(__filename);
+  const staticDir  = join(__dirname, 'web');
   const ws = createWsServer({
     registry, bus: dedupedBus, tap, staticDir, approvals,
     onInput: async (sessionId, data, source) => {
       const r = await bridge.deliver(sessionId, data, source);
       return { ok: r.ok, ...(r.reason !== undefined ? { reason: r.reason } : {}) };
     },
-    onLastActionsClientGone: (sessionId) => {
-      // The last actions-capable client just unsubscribed/disconnected. Any
-      // pending PreToolUse approval for this session is now waiting on a
-      // ghost. Resolve them as 'ask' immediately so claude's TUI prompt
-      // takes over instead of timing out 60s later.
-      const pending = approvals.pendingForSession(sessionId);
-      if (pending.length === 0) return;
-      // Clean up per-request maps + broadcast resolution BEFORE calling
-      // cancelOnLastClientGone (cancellation removes pending entries, so we
-      // need to capture them first — same pattern as the session-removed
-      // handler below).
-      for (const a of pending) {
-        pendingHandlers.delete(a.requestId);
-        pendingUpdatedInput.delete(a.requestId);
-        pendingUpdatedPermissions.delete(a.requestId);
-        wsRef?.broadcast({
-          type: 'session.prompt-request.resolved',
-          sessionId, requestId: a.requestId, reason: 'cancelled-no-clients',
-          resolvedBy: null,
-        });
-      }
-      approvals.cancelOnLastClientGone(sessionId);
-      log.info({ sessionId, cancelled: pending.length }, 'released pending approvals: last actions-client gone');
-    },
-    onPromptResponse: (sessionId, requestId, answers, clientKind) => {
-      const slot = pendingHandlers.get(requestId);
-      if (!slot) return false;
-      pendingHandlers.delete(requestId);
-      const decision = slot.handler.decide(answers, slot.toolInput, slot.ctx);
-
-      let outcome: { decision: 'allow' | 'deny' | 'ask'; reason?: string };
-      switch (decision.kind) {
-        case 'passthrough':
-          outcome = { decision: 'ask', reason: 'sesshin: handler passthrough' };
-          break;
-        case 'allow':
-          outcome = {
-            decision: 'allow',
-            ...(decision.additionalContext ? { reason: decision.additionalContext } : {}),
-          };
-          break;
-        case 'deny':
-          outcome = {
-            decision: 'deny',
-            ...(decision.additionalContext
-              ? { reason: decision.additionalContext }
-              : decision.reason !== undefined
-                ? { reason: decision.reason }
-                : {}),
-          };
-          break;
-        case 'ask':
-          outcome = { decision: 'ask', ...(decision.reason ? { reason: decision.reason } : {}) };
-          break;
-      }
-
-      if (decision.kind === 'allow' && decision.sessionAllowAdd) {
-        const rec = registry.get(sessionId);
-        if (rec) rec.sessionAllowList.push(decision.sessionAllowAdd);
-      }
-
-      if (decision.kind === 'allow' && decision.updatedInput) {
-        pendingUpdatedInput.set(requestId, decision.updatedInput);
-      }
-      if (decision.kind === 'allow' && decision.updatedPermissions) {
-        pendingUpdatedPermissions.set(requestId, decision.updatedPermissions);
-      }
-
-      const ok = approvals.decide(requestId, outcome);
-      if (ok) {
-        ws.broadcast({
-          type: 'session.prompt-request.resolved',
-          sessionId, requestId, reason: 'decided',
-          resolvedBy: `remote-adapter:${clientKind}`,
-        });
-        historyStore.push(sessionId, {
-          requestId, tool: slot.tool, resolvedAt: Date.now(),
-          decision: outcome.decision,
-          ...(outcome.reason ? { reason: outcome.reason } : {}),
-        });
-      }
-      return ok;
-    },
+    ...adapters.wsDeps,
   });
   wsRef = ws;
   await ws.listen(config.publicPort, config.publicHost);
   log.info({ port: config.publicPort }, 'hub WS listening');
 
-  // When a session disappears, unblock any pending hook handlers waiting on
-  // approval — otherwise they'd sit until their internal timeout.
-  registry.on('session-removed', (id) => {
-    for (const a of approvals.pendingForSession(id)) {
-      pendingHandlers.delete(a.requestId);
-      pendingUpdatedInput.delete(a.requestId);
-      pendingUpdatedPermissions.delete(a.requestId);
-      wsRef?.broadcast({
-        type: 'session.prompt-request.resolved',
-        sessionId: id, requestId: a.requestId, reason: 'session-ended',
-        resolvedBy: null,
-      });
-    }
-    approvals.cancelForSession(id);
-  });
+  registry.on('session-removed', adapters.onSessionRemoved);
 
   // Broadcast PTY raw output to WS clients with the `raw` capability.
   const rawSubscriptions = new Map<string, () => void>();
