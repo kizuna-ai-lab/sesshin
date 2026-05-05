@@ -490,20 +490,25 @@ export function createHookEventInterceptor(deps: {
         // actually changes, so the cursor reset here is redundant in the
         // common case but harmless.
         registry.resetChildScopedState(env.sessionId);
-        registry.setClaudeSessionId(env.sessionId, newClaudeId);
-
-        const rawSource = env.raw['source'];
-        const reason: 'startup' | 'clear' | 'resume' | 'unknown' =
-          rawSource === 'startup' || rawSource === 'clear' || rawSource === 'resume'
-            ? rawSource
-            : 'unknown';
-        getWs()?.broadcast({
-          type: 'session.child-changed',
-          sessionId:               env.sessionId,
-          previousClaudeSessionId: prevClaudeId,
-          claudeSessionId:         newClaudeId,
-          reason,
-        });
+        if (registry.setClaudeSessionId(env.sessionId, newClaudeId)) {
+          const rawSource = env.raw['source'];
+          const reason: 'startup' | 'clear' | 'resume' | 'unknown' =
+            rawSource === 'startup' || rawSource === 'clear' || rawSource === 'resume'
+              ? rawSource
+              : 'unknown';
+          getWs()?.broadcast({
+            type: 'session.child-changed',
+            sessionId:               env.sessionId,
+            previousClaudeSessionId: prevClaudeId,
+            claudeSessionId:         newClaudeId,
+            reason,
+          });
+        } else {
+          log.warn(
+            { sessionId: env.sessionId, newClaudeId },
+            'boundary detected but setClaudeSessionId returned false — skipping broadcast',
+          );
+        }
       }
     }
 
@@ -537,6 +542,9 @@ export function createHookEventInterceptor(deps: {
       }
     }
 
+    // Intentionally last: downstream observers wired through inner() (state-machine
+    // applier, JSONL mode tracker, etc.) read the post-boundary registry snapshot,
+    // so the boundary work above must complete before they fire.
     inner(env);
   };
 }
