@@ -4,6 +4,7 @@ import {
   UpstreamMessageSchema, DownstreamMessageSchema,
   SessionListSchema, ServerErrorSchema, PROTOCOL_VERSION,
   SessionPromptRequestResolvedSchema, SessionConfigChangedSchema,
+  SessionChildChangedSchema,
 } from './protocol.js';
 
 describe('protocol upstream', () => {
@@ -109,5 +110,112 @@ describe('SessionConfigChangedSchema', () => {
       type: 'session.config-changed', sessionId: 's',
       pin: 'x',  // missing quietUntil and sessionGateOverride
     })).toThrow();
+  });
+});
+
+describe('SessionChildChangedSchema', () => {
+  const base = {
+    type: 'session.child-changed' as const,
+    sessionId: 's',
+  };
+
+  it('parses startup transition (null → string)', () => {
+    const r = SessionChildChangedSchema.parse({
+      ...base,
+      previousClaudeSessionId: null,
+      claudeSessionId: 'c1',
+      reason: 'startup',
+    });
+    expect(r.previousClaudeSessionId).toBeNull();
+    expect(r.claudeSessionId).toBe('c1');
+    expect(r.reason).toBe('startup');
+  });
+
+  it('parses /clear transition (string → string)', () => {
+    const r = SessionChildChangedSchema.parse({
+      ...base,
+      previousClaudeSessionId: 'c1',
+      claudeSessionId: 'c2',
+      reason: 'clear',
+    });
+    expect(r.previousClaudeSessionId).toBe('c1');
+    expect(r.claudeSessionId).toBe('c2');
+    expect(r.reason).toBe('clear');
+  });
+
+  it('parses --resume transition', () => {
+    const r = SessionChildChangedSchema.parse({
+      ...base,
+      previousClaudeSessionId: null,
+      claudeSessionId: 'c-resumed',
+      reason: 'resume',
+    });
+    expect(r.reason).toBe('resume');
+  });
+
+  it('parses session-end transition (string → null)', () => {
+    const r = SessionChildChangedSchema.parse({
+      ...base,
+      previousClaudeSessionId: 'c1',
+      claudeSessionId: null,
+      reason: 'session-end',
+    });
+    expect(r.previousClaudeSessionId).toBe('c1');
+    expect(r.claudeSessionId).toBeNull();
+    expect(r.reason).toBe('session-end');
+  });
+
+  it('accepts unknown as a fallback reason', () => {
+    const r = SessionChildChangedSchema.parse({
+      ...base,
+      previousClaudeSessionId: null,
+      claudeSessionId: 'c1',
+      reason: 'unknown',
+    });
+    expect(r.reason).toBe('unknown');
+  });
+
+  it('rejects compact (compact reuses session_id, no boundary event)', () => {
+    expect(() => SessionChildChangedSchema.parse({
+      ...base,
+      previousClaudeSessionId: 'c1',
+      claudeSessionId: 'c1',
+      reason: 'compact',
+    })).toThrow();
+  });
+
+  it('rejects unrecognized reason values', () => {
+    expect(() => SessionChildChangedSchema.parse({
+      ...base,
+      previousClaudeSessionId: null,
+      claudeSessionId: 'c1',
+      reason: 'restart',
+    })).toThrow();
+  });
+
+  it('rejects missing previousClaudeSessionId (must be explicit, even if null)', () => {
+    expect(() => SessionChildChangedSchema.parse({
+      ...base,
+      claudeSessionId: 'c1',
+      reason: 'startup',
+    })).toThrow();
+  });
+
+  it('rejects missing claudeSessionId (must be explicit, even if null)', () => {
+    expect(() => SessionChildChangedSchema.parse({
+      ...base,
+      previousClaudeSessionId: 'c1',
+      reason: 'session-end',
+    })).toThrow();
+  });
+
+  it('routes through DownstreamMessageSchema discriminated union', () => {
+    const r = DownstreamMessageSchema.parse({
+      type: 'session.child-changed', sessionId: 's',
+      previousClaudeSessionId: null,
+      claudeSessionId: 'c1',
+      reason: 'startup',
+    });
+    expect(r.type).toBe('session.child-changed');
   });
 });

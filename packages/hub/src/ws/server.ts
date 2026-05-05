@@ -77,7 +77,8 @@ function capabilityRequiredFor(msgType: string): string | null {
     case 'session.attention':            return 'attention';
     case 'session.prompt-request':
     case 'session.prompt-request.resolved': return 'actions';
-    case 'session.config-changed':       return 'state';
+    case 'session.config-changed':
+    case 'session.child-changed':        return 'state';
     case 'session.state':
     case 'session.list':
     case 'session.added':
