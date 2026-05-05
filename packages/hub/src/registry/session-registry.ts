@@ -170,6 +170,7 @@ export class SessionRegistry extends EventEmitter {
     const s = this.sessions.get(id);
     if (!s) return false;
     s.lastHeartbeat = Date.now();
+    this.emit('substate-changed', this.publicView(s));
     return true;
   }
 

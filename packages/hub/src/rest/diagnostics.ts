@@ -1,6 +1,9 @@
 import type { ServerResponse } from 'node:http';
 import type { SessionRegistry } from '../registry/session-registry.js';
 import type { ApprovalManager } from '../approval-manager.js';
+import { evaluateSessionLiveness } from '../session-liveness.js';
+
+const HEARTBEAT_TIMEOUT_MS = 120_000;
 
 export interface DiagnosticsDeps {
   registry: SessionRegistry;
@@ -34,12 +37,21 @@ export function diagnosticsSnapshot(deps: DiagnosticsDeps): {
     claudeAllowRules: string[];
     pendingApprovals: number;
     hasSubscribedActionsClient: boolean;
+    lastHeartbeatAgeMs: number;
+    heartbeatExpired: boolean;
+    pidExists: boolean;
+    pidMatchesSesshinProcess: boolean;
     sessionFilePath?: string;
   }>;
 } {
   return {
     sessions: deps.registry.list().map((info) => {
       const rec = deps.registry.get(info.id)!;
+      const liveness = evaluateSessionLiveness({
+        pid: rec.pid,
+        lastHeartbeat: rec.lastHeartbeat,
+        heartbeatTimeoutMs: HEARTBEAT_TIMEOUT_MS,
+      });
       return {
         id: info.id,
         name: info.name,
@@ -49,6 +61,10 @@ export function diagnosticsSnapshot(deps: DiagnosticsDeps): {
         claudeAllowRules: rec.claudeAllowRules,
         pendingApprovals: deps.approvals.pendingForSession(info.id).length,
         hasSubscribedActionsClient: deps.hasSubscribedActionsClient(info.id),
+        lastHeartbeatAgeMs: liveness.lastHeartbeatAgeMs,
+        heartbeatExpired: liveness.heartbeatExpired,
+        pidExists: liveness.pidExists,
+        pidMatchesSesshinProcess: liveness.pidMatchesSesshinProcess,
         ...(rec.sessionFilePath ? { sessionFilePath: rec.sessionFilePath } : {}),
       };
     }),

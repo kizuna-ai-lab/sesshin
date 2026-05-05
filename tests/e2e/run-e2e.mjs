@@ -64,7 +64,12 @@ const env = {
   HOME: tmp,        // isolate ~/.claude/, ~/.cache/sesshin/
 };
 
-function fail(msg) { console.error(msg); rmSync(tmp, { recursive: true, force: true }); process.exit(1); }
+function fail(msg, extra = null) {
+  console.error(msg);
+  if (extra) console.error(JSON.stringify(extra, null, 2));
+  rmSync(tmp, { recursive: true, force: true });
+  process.exit(1);
+}
 
 async function main() {
   const cli = spawn('node', [CLI_BIN, 'claude', 'do a thing'], { env, stdio: ['pipe', 'pipe', 'inherit'] });
@@ -104,12 +109,13 @@ async function main() {
 
   // open WS, capture events
   const ws = new WS('ws://127.0.0.1:9662/v1/ws');
-  const got = { events: [], summary: false, state: null, confirmations: [], confirmationResolved: 0 };
+  const got = { events: [], summary: false, state: null, confirmations: [], confirmationResolved: 0, messages: [] };
   await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
   ws.send(JSON.stringify({ type: 'client.identify', protocol: 1, client: { kind: 'debug-web', version: '0', capabilities: ['summary','events','state','actions'] } }));
   ws.send(JSON.stringify({ type: 'subscribe', sessions: 'all', since: null }));
   ws.on('message', (m) => {
     const msg = JSON.parse(m.toString());
+    got.messages.push(msg);
     if (msg.type === 'session.event')   got.events.push(msg);
     if (msg.type === 'session.summary') got.summary = true;
     if (msg.type === 'session.state')   got.state = msg.state;
@@ -128,14 +134,20 @@ async function main() {
 
   // Wait until the remote approval has resolved AND the stub's prompt is
   // visible before sending literal input back into Claude's PTY. Sending the
-  // text too early races the approval release and can get dropped.
+  // text too early races the approval release and can get dropped. In practice
+  // the prompt can be visible slightly before the child process has fully
+  // armed its stdin listener, so hold one extra beat after the prompt becomes
+  // visible to avoid a lost write.
   await new Promise((res, rej) => {
     const start = Date.now();
+    let promptVisibleAt = null;
     const t = setInterval(() => {
       const promptShown = cliOut.includes('Confirm? (y/n)');
       const approvalResolved = got.confirmationResolved > 0;
       const stateOk = got.state === 'idle' || got.state === 'awaiting-input' || got.state === 'awaiting-confirmation';
-      if (promptShown && approvalResolved && stateOk) { clearInterval(t); res(); }
+      if (promptShown && promptVisibleAt === null) promptVisibleAt = Date.now();
+      const promptSettled = promptVisibleAt !== null && (Date.now() - promptVisibleAt) >= 250;
+      if (approvalResolved && stateOk && promptSettled) { clearInterval(t); res(); }
       else if (Date.now() - start > 15000) {
         clearInterval(t);
         rej(new Error(`timeout waiting for prompt+approval+state. promptShown=${promptShown} approvalResolved=${approvalResolved} state=${got.state} cliOut:\n${cliOut}`));
@@ -147,6 +159,8 @@ async function main() {
   // removed in cleanup; only `stop` (ESC) remains as a TTY shortcut, since
   // ESC isn't typeable through input.text trivially.
   ws.send(JSON.stringify({ type: 'input.text', sessionId: sid, text: 'y\r' }));
+  await new Promise((r) => setTimeout(r, 50));
+  ws.send(JSON.stringify({ type: 'input.text', sessionId: sid, text: 'y\r' }));
 
   // wait for cli exit (with timeout)
   await new Promise((res, rej) => {
@@ -154,11 +168,13 @@ async function main() {
     cli.on('exit', () => { clearTimeout(t); res(); });
   });
 
-  // give the hub time to drain final events / summary
-  await new Promise((r) => setTimeout(r, 1000));
+  // give the hub time to drain final events / summary. The summary may arrive
+  // after SessionEnd/session.removed because it is debounced and can fall back
+  // through multiple summarizer modes before broadcasting.
+  await new Promise((r) => setTimeout(r, 3000));
 
   // assertions
-  if (!got.summary)             fail('no session.summary received');
+  if (!got.summary)             fail('no session.summary received', { state: got.state, confirmationResolved: got.confirmationResolved, cliOut, messageTypes: got.messages.map((m) => m.type), messages: got.messages.slice(-20) });
   if (got.events.length === 0)  fail('no session.event received');
   if (got.state !== null && got.state !== 'idle' && got.state !== 'done') fail(`unexpected final state: ${got.state}`);
   if (!cliOut.includes('You said: y')) fail(`stub-claude did not see "y": output was:\n${cliOut}`);

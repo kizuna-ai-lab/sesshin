@@ -65,4 +65,19 @@ describe('summarizer trigger', () => {
     await new Promise((r) => setTimeout(r, 80));
     expect(captured).toHaveLength(1);
   });
+
+  it('still broadcasts a summary after the session is unregistered before debounce fires', async () => {
+    const reg = new SessionRegistry();
+    reg.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const bus = new EventBus();
+    const broadcasts: any[] = [];
+    wireSummarizerTrigger({ bus, registry: reg, summarizer: fakeSummarizer('after-unregister'), broadcast: (m) => broadcasts.push(m), debounceMs: 30 });
+    bus.emit({ eventId: 'e1', sessionId: 's1', kind: 'user-prompt', payload: { prompt: 'hello' }, source: 'observer:hook-ingest', ts: 1 });
+    bus.emit({ eventId: 'e2', sessionId: 's1', kind: 'agent-output', payload: { stopReason: 'end_turn' }, source: 'observer:hook-ingest', ts: 2 });
+    reg.unregister('s1');
+    await new Promise((r) => setTimeout(r, 80));
+    const summary = broadcasts.find((b) => b.type === 'session.summary');
+    expect(summary).toBeTruthy();
+    expect(summary.oneLine).toBe('after-unregister');
+  });
 });

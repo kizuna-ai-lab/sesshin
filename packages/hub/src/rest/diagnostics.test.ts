@@ -34,7 +34,11 @@ describe('GET /api/diagnostics', () => {
       claudeSessionId: null,
       claudeAllowRules: [],
       pendingApprovals: 0,
+      heartbeatExpired: false,
     });
+    expect(typeof j.sessions[0].pidExists).toBe('boolean');
+    expect(typeof j.sessions[0].pidMatchesSesshinProcess).toBe('boolean');
+    expect(typeof j.sessions[0].lastHeartbeatAgeMs).toBe('number');
   });
 
   it('returns 503 when approvals dependency missing', async () => {
@@ -79,6 +83,17 @@ describe('GET /api/diagnostics', () => {
     const j = await r.json();
     const s = j.sessions.find((x: { id: string }) => x.id === 's5')!;
     expect('sessionFilePath' in s).toBe(false);
+  });
+
+  it('marks sessions with stale heartbeat as expired in diagnostics', async () => {
+    registry.register({ id: 's7', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const rec = registry.get('s7')!;
+    rec.lastHeartbeat = Date.now() - 121_000;
+    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const j = await r.json();
+    const s = j.sessions.find((x: { id: string }) => x.id === 's7')!;
+    expect(s.heartbeatExpired).toBe(true);
+    expect(s.lastHeartbeatAgeMs).toBeGreaterThanOrEqual(121_000);
   });
 });
 

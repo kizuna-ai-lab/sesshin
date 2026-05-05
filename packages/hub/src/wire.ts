@@ -17,6 +17,7 @@ import { PtyTap } from './observers/pty-tap.js';
 import { tailSessionFile } from './observers/session-file-tail.js';
 import { createRestServer, type RestServer, type RestServerDeps } from './rest/server.js';
 import { createWsServer, type WsServerInstance, type WsServerDeps } from './ws/server.js';
+import { reapStaleSessions, shouldRestoreSession } from './wire-liveness.js';
 import { InputBridge } from './input-bridge.js';
 import { Summarizer } from './summarizer/index.js';
 import { runModeBPrime } from './summarizer/mode-b-prime.js';
@@ -456,6 +457,9 @@ export interface HubInstance {
   shutdown: () => Promise<void>;
 }
 
+const SESSION_HEARTBEAT_TIMEOUT_MS = 120_000;
+const SESSION_REAP_INTERVAL_MS = 10_000;
+
 export async function startHub(): Promise<HubInstance> {
   const registry = new SessionRegistry();
   const bus      = new EventBus();
@@ -466,23 +470,46 @@ export async function startHub(): Promise<HubInstance> {
 
   // Restore from checkpoint (best-effort).
   for (const r of checkpoint.load().sessions) {
-    // Verify the original CLI process is still alive.
-    let alive = false;
-    try { process.kill(r.pid, 0); alive = true; } catch { alive = false; }
-    if (!alive) {
-      log.info({ id: r.id, pid: r.pid }, 'skipping dead session on restore');
+    const liveness = shouldRestoreSession(r, SESSION_HEARTBEAT_TIMEOUT_MS);
+    if (!liveness.shouldKeep) {
+      log.info({ id: r.id, pid: r.pid, reason: liveness.reason }, 'skipping stale session on restore');
       continue;
     }
     try {
-      registry.register({
+      const restored = registry.register({
         id: r.id, name: r.name, agent: r.agent, cwd: r.cwd, pid: r.pid,
         sessionFilePath: r.sessionFilePath,
       });
+      restored.startedAt = r.startedAt;
+      restored.state = r.state;
+      restored.substate = structuredClone(r.substate);
+      restored.lastSummaryId = r.lastSummaryId;
+      restored.fileTailCursor = r.fileTailCursor;
+      restored.lastHeartbeat = r.lastHeartbeat;
+      restored.claudeAllowRules = [...r.claudeAllowRules];
+      restored.sessionGateOverride = r.sessionGateOverride;
+      restored.pin = r.pin;
+      restored.quietUntil = r.quietUntil;
+      restored.claudeSessionId = r.claudeSessionId;
     } catch (e) {
       log.warn({ err: e, id: r.id }, 'failed to restore session');
     }
   }
+
+  const staleSweep = setInterval(() => {
+    const removed = reapStaleSessions(registry, SESSION_HEARTBEAT_TIMEOUT_MS);
+    for (const item of removed) {
+      log.info({ sessionId: item.sessionId, reason: item.reason }, 'removed stale session');
+    }
+  }, SESSION_REAP_INTERVAL_MS);
+  staleSweep.unref();
+
   checkpoint.start();
+
+  // Reap once after startup restore so stale sessions don't survive until the first interval.
+  for (const item of reapStaleSessions(registry, SESSION_HEARTBEAT_TIMEOUT_MS)) {
+    log.info({ sessionId: item.sessionId, reason: item.reason }, 'removed stale session after startup');
+  }
 
   // Wire dedup + state machine to bus
   const dedupedBus = new EventBus();
@@ -638,6 +665,7 @@ export async function startHub(): Promise<HubInstance> {
   return {
     rest, ws, registry, bus, tap, bridge,
     shutdown: async () => {
+      clearInterval(staleSweep);
       ptyIdleWatcher.stop();
       for (const off of rawSubscriptions.values()) off();
       for (const s of stopTails.values()) s();
