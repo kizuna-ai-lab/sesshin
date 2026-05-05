@@ -33,7 +33,12 @@ export const fileEditHandler: ToolHandler = {
     }
     if (key === 'yes-session-scope') {
       const dir = filePath ? dirname(filePath) : '';
-      return { kind: 'allow', sessionAllowAdd: `Edit(${dir}/*)` };
+      return {
+        kind: 'allow',
+        updatedPermissions: [
+          { type: 'addRules', behavior: 'allow', destination: 'session', rules: [`Edit(${dir}/*)`] },
+        ],
+      };
     }
     if (key === 'no') {
       return a?.freeText ? { kind: 'deny', additionalContext: a.freeText } : { kind: 'deny' };

@@ -1,20 +1,32 @@
 import { z } from 'zod';
 
 /**
- * Subset of Claude Code's PermissionUpdate union — currently only the
- * `setMode` variant, which is what `allow` decisions use to drive the
- * post-approval permission mode (e.g. on ExitPlanMode approval, deciding
- * whether the session resumes in `default` or `acceptEdits`).
+ * Subset of Claude Code's PermissionUpdate union, covering the variants
+ * sesshin currently emits from `allow` decisions:
+ *  - `setMode`  — pin the post-approval permission mode (e.g. on ExitPlanMode
+ *                 approval, choosing `default` vs `acceptEdits`).
+ *  - `addRules` — attach a session-scope allow/deny/ask rule so future matching
+ *                 tool calls bypass the PermissionRequest hook entirely (used by
+ *                 the "Yes, don't ask again for…" prefix flow on Bash/Edit/etc.).
  *
- * Schema mirrors Claude Code's PermissionUpdateSchema (src/types/permissions.ts
- * in the CC source). Other variants (addRules, addDirectories, …) intentionally
- * not implemented until a sesshin handler needs them.
+ * Schema mirrors Claude Code's PermissionUpdateSchema (coreSchemas.ts:263-294
+ * in the CC source). Other variants (replaceRules, removeRules, addDirectories,
+ * removeDirectories) are intentionally not implemented until a sesshin handler
+ * needs them.
  */
-export const PermissionUpdate = z.object({
-  type: z.literal('setMode'),
-  destination: z.enum(['session', 'userSettings', 'projectSettings', 'localSettings', 'cliArg']),
-  mode: z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk']),
-});
+export const PermissionUpdate = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('setMode'),
+    destination: z.enum(['session', 'userSettings', 'projectSettings', 'localSettings', 'cliArg']),
+    mode: z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk']),
+  }),
+  z.object({
+    type: z.literal('addRules'),
+    destination: z.enum(['session', 'userSettings', 'projectSettings', 'localSettings', 'cliArg']),
+    rules: z.array(z.string()),
+    behavior: z.enum(['allow', 'deny', 'ask']),
+  }),
+]);
 export type PermissionUpdate = z.infer<typeof PermissionUpdate>;
 
 /**

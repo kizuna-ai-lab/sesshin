@@ -39,7 +39,12 @@ export const bashHandler: ToolHandler = {
     if (key === 'yes-prefix') {
       const command = typeof input['command'] === 'string' ? input['command'] : '';
       const prefix = (a?.freeText && a.freeText.length > 0) ? a.freeText : heuristicPrefix(command);
-      return { kind: 'allow', sessionAllowAdd: `Bash(${prefix})` };
+      return {
+        kind: 'allow',
+        updatedPermissions: [
+          { type: 'addRules', behavior: 'allow', destination: 'session', rules: [`Bash(${prefix})`] },
+        ],
+      };
     }
     if (key === 'no') {
       return a?.freeText

@@ -12,12 +12,17 @@ describe('fileEditHandler', () => {
     expect(keys).toEqual(['yes', 'yes-session-scope', 'no']);
   });
 
-  it('yes-session-scope adds dir glob to allow list', () => {
+  it('yes-session-scope emits addRules updatedPermissions for the dir glob', () => {
     const d = fileEditHandler.decide(
       [{ questionIndex: 0, selectedKeys: ['yes-session-scope'] }],
       { file_path: '/proj/src/foo.ts' }, ctx,
     );
-    expect(d).toMatchObject({ kind: 'allow', sessionAllowAdd: 'Edit(/proj/src/*)' });
+    expect(d).toMatchObject({
+      kind: 'allow',
+      updatedPermissions: [
+        { type: 'addRules', behavior: 'allow', destination: 'session', rules: ['Edit(/proj/src/*)'] },
+      ],
+    });
   });
 
   it('no with freeText becomes deny + additionalContext', () => {

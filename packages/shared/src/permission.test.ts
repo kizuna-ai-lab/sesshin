@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { PermissionRequestBody, PermissionRequestDecision, PermissionUpdate } from './permission.js';
 
-describe('PermissionUpdate schema', () => {
+describe('PermissionUpdate schema (setMode variant)', () => {
   it('accepts setMode with valid destination + mode', () => {
     const r = PermissionUpdate.safeParse({
       type: 'setMode', destination: 'session', mode: 'default',
@@ -22,8 +22,68 @@ describe('PermissionUpdate schema', () => {
     const r = PermissionUpdate.safeParse({ type: 'setMode', destination: 'wat', mode: 'default' });
     expect(r.success).toBe(false);
   });
-  it('rejects unknown type', () => {
-    const r = PermissionUpdate.safeParse({ type: 'addRules', destination: 'session', mode: 'default' });
+});
+
+describe('PermissionUpdate schema (addRules variant)', () => {
+  it('accepts addRules with destination + rules + behavior', () => {
+    const r = PermissionUpdate.safeParse({
+      type: 'addRules',
+      destination: 'session',
+      rules: ['Bash(npm run:*)'],
+      behavior: 'allow',
+    });
+    expect(r.success).toBe(true);
+    if (r.success && r.data.type === 'addRules') {
+      expect(r.data.rules).toEqual(['Bash(npm run:*)']);
+      expect(r.data.behavior).toBe('allow');
+      expect(r.data.destination).toBe('session');
+    }
+  });
+  it('accepts each external permission behavior', () => {
+    for (const behavior of ['allow', 'deny', 'ask']) {
+      const r = PermissionUpdate.safeParse({
+        type: 'addRules', destination: 'session', rules: ['Bash(ls:*)'], behavior,
+      });
+      expect(r.success, `behavior=${behavior}`).toBe(true);
+    }
+  });
+  it('accepts an empty rules array', () => {
+    const r = PermissionUpdate.safeParse({
+      type: 'addRules', destination: 'session', rules: [], behavior: 'allow',
+    });
+    expect(r.success).toBe(true);
+  });
+  it('rejects addRules missing behavior', () => {
+    const r = PermissionUpdate.safeParse({
+      type: 'addRules', destination: 'session', rules: ['Bash(npm run:*)'],
+    });
+    expect(r.success).toBe(false);
+  });
+  it('rejects addRules with unrecognized behavior', () => {
+    const r = PermissionUpdate.safeParse({
+      type: 'addRules', destination: 'session', rules: ['Bash(npm run:*)'], behavior: 'maybe',
+    });
+    expect(r.success).toBe(false);
+  });
+  it('rejects addRules with non-string rule entries', () => {
+    const r = PermissionUpdate.safeParse({
+      type: 'addRules', destination: 'session', rules: [{}], behavior: 'allow',
+    });
+    expect(r.success).toBe(false);
+  });
+  it('rejects addRules with unknown destination', () => {
+    const r = PermissionUpdate.safeParse({
+      type: 'addRules', destination: 'wat', rules: ['Bash(ls:*)'], behavior: 'allow',
+    });
+    expect(r.success).toBe(false);
+  });
+});
+
+describe('PermissionUpdate schema (discriminator)', () => {
+  it('rejects an unknown type value', () => {
+    const r = PermissionUpdate.safeParse({
+      type: 'replaceRules', destination: 'session', rules: ['Bash(ls:*)'], behavior: 'allow',
+    });
     expect(r.success).toBe(false);
   });
 });

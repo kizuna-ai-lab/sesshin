@@ -27,7 +27,17 @@ export const webFetchHandler: ToolHandler = {
     if (key === 'yes-host') {
       try {
         const u = new URL(url);
-        return { kind: 'allow', sessionAllowAdd: `WebFetch(${u.protocol}//${u.host}/*)` };
+        return {
+          kind: 'allow',
+          updatedPermissions: [
+            {
+              type: 'addRules',
+              behavior: 'allow',
+              destination: 'session',
+              rules: [`WebFetch(${u.protocol}//${u.host}/*)`],
+            },
+          ],
+        };
       } catch {
         return { kind: 'allow' };
       }
