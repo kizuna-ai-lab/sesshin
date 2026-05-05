@@ -66,7 +66,12 @@ fetch(url, {
   process.stderr.write(String(err));
   process.exit(1);
 });
-`, url, JSON.stringify(payload)], { env: process.env, encoding: 'utf-8' });
+`, url, JSON.stringify(payload)], {
+  env: process.env,
+  encoding: 'utf-8',
+  timeout: 5_000,
+  killSignal: 'SIGKILL',
+});
   if (r.status !== 0) return 'ask';
   try {
     const out = JSON.parse(r.stdout ?? '');

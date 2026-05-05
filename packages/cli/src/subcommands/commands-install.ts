@@ -36,7 +36,9 @@ export async function runCommandsInstall(opts: CommandsInstallOptions = {}): Pro
   // Step 1: prune stale sesshin-*.md present in target but not in bundle.
   let pruned = 0;
   if (existsSync(target)) {
-    for (const f of readdirSync(target)) {
+    for (const e of readdirSync(target, { withFileTypes: true })) {
+      if (!e.isFile()) continue;
+      const f = e.name;
       if (!f.endsWith('.md')) continue;
       if (!f.startsWith('sesshin-')) continue;   // own only sesshin-* files
       if (bundled.has(f)) continue;

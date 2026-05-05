@@ -1,6 +1,8 @@
 import { dirname } from 'node:path';
 import type { ToolHandler, RenderOutput, HookDecision, HandlerCtx, PromptAnswer } from './types.js';
 
+const EDIT_TOOL_NAMES = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] as const;
+
 export const fileEditHandler: ToolHandler = {
   toolName: 'FileEdit',
 
@@ -32,11 +34,18 @@ export const fileEditHandler: ToolHandler = {
       return a?.freeText ? { kind: 'allow', additionalContext: a.freeText } : { kind: 'allow' };
     }
     if (key === 'yes-session-scope') {
-      const dir = filePath ? dirname(filePath) : '';
+      if (!filePath) return { kind: 'allow' };
+      const dir = dirname(filePath);
+      if (!dir || dir === '.') return { kind: 'allow' };
       return {
         kind: 'allow',
         updatedPermissions: [
-          { type: 'addRules', behavior: 'allow', destination: 'session', rules: [{ toolName: 'Edit', ruleContent: `${dir}/*` }] },
+          ...EDIT_TOOL_NAMES.map((toolName) => ({
+            type: 'addRules' as const,
+            behavior: 'allow' as const,
+            destination: 'session' as const,
+            rules: [{ toolName, ruleContent: `${dir}/*` }],
+          })),
         ],
       };
     }

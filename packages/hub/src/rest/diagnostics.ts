@@ -30,6 +30,7 @@ export function diagnosticsSnapshot(deps: DiagnosticsDeps): {
     name: string;
     state: string;
     permissionMode: string;
+    claudeSessionId: string | null;
     claudeAllowRules: string[];
     pendingApprovals: number;
     hasSubscribedActionsClient: boolean;
@@ -44,6 +45,7 @@ export function diagnosticsSnapshot(deps: DiagnosticsDeps): {
         name: info.name,
         state: info.state,
         permissionMode: info.substate.permissionMode,
+        claudeSessionId: info.claudeSessionId,
         claudeAllowRules: rec.claudeAllowRules,
         pendingApprovals: deps.approvals.pendingForSession(info.id).length,
         hasSubscribedActionsClient: deps.hasSubscribedActionsClient(info.id),

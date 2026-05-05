@@ -31,6 +31,7 @@ describe('GET /api/diagnostics', () => {
     expect(j.sessions[0]).toMatchObject({
       id: 's1', state: 'starting',
       permissionMode: 'default',
+      claudeSessionId: null,
       claudeAllowRules: [],
       pendingApprovals: 0,
     });
@@ -62,6 +63,15 @@ describe('GET /api/diagnostics', () => {
     const j = await r.json();
     const s = j.sessions.find((x: { id: string }) => x.id === 's4')!;
     expect(s.sessionFilePath).toBe('/abs/path/to/transcript.jsonl');
+  });
+
+  it('exposes claudeSessionId when set', async () => {
+    registry.register({ id: 's6', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    registry.setClaudeSessionId('s6', 'cc-123');
+    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const j = await r.json();
+    const s = j.sessions.find((x: { id: string }) => x.id === 's6')!;
+    expect(s.claudeSessionId).toBe('cc-123');
   });
   it('omits sessionFilePath when not set', async () => {
     registry.register({ id: 's5', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '' });

@@ -418,13 +418,17 @@ export function createHookEventInterceptor(deps: {
       }
     }
 
-    // Phase B4: SessionEnd → clear current child id, broadcast.
-    // SessionEnd does NOT cancel pending approvals here; onSessionRemoved
-    // handles that when the parent sesshin session is actually removed.
-    // SessionEnd from Claude is just the conversation closing.
+    // Phase B4: SessionEnd closes the current Claude child. Any pending
+    // approvals tied to that child are now dead (Claude won't reuse the
+    // tool_use_id in a later child session), so resolve them immediately,
+    // reset child-scoped state, then clear claudeSessionId and broadcast.
     if (env.event === 'SessionEnd') {
       const rec = registry.get(env.sessionId);
       const prev = rec?.claudeSessionId ?? null;
+      if (prev !== null) {
+        onClaudeSessionBoundary(env.sessionId);
+        registry.resetChildScopedState(env.sessionId);
+      }
       if (prev !== null && registry.clearClaudeSessionId(env.sessionId)) {
         getWs()?.broadcast({
           type: 'session.child-changed',
@@ -435,7 +439,6 @@ export function createHookEventInterceptor(deps: {
         });
       }
     }
-
     // Intentionally last: downstream observers wired through inner() (state-machine
     // applier, JSONL mode tracker, etc.) read the post-boundary registry snapshot,
     // so the boundary work above must complete before they fire.
