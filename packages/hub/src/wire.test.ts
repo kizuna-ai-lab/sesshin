@@ -215,4 +215,31 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
     // Wait for the decision promise to settle so the test completes cleanly.
     await decisionPromise;
   });
+
+  it('cancelled-tool-completed → resolvedBy = hub-stale-cleanup', async () => {
+    const sid = registerSession();
+    const { request } = approvals.open({
+      sessionId: sid, tool: 'Bash', toolInput: { command: 'ls' },
+      toolUseId: 'tu_stale', origin: 'permission', questions: [],
+    });
+
+    const r = await fetch(`http://127.0.0.1:${restPort}/hooks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        agent: 'claude-code', sessionId: sid, ts: Date.now(), event: 'PostToolUse',
+        raw: {
+          nativeEvent: 'PostToolUse', tool_name: 'Bash',
+          tool_input: { command: 'ls' }, tool_use_id: 'tu_stale',
+        },
+      }),
+    });
+    expect(r.status).toBe(204);
+
+    await waitFor(() => findResolvedFrame(request.requestId) !== undefined);
+    const frame = findResolvedFrame(request.requestId)!;
+    expect(frame.reason).toBe('cancelled-tool-completed');
+    expect(frame.resolvedBy).toBe('hub-stale-cleanup');
+    expect(frame.sessionId).toBe(sid);
+  });
 });
