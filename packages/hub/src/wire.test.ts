@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import WebSocket from 'ws';
 import { createApprovalAdapters } from './wire.js';
-import { createRestServer, type RestServer } from './rest/server.js';
+import { createRestServer, type RestServer, type RestServerDeps } from './rest/server.js';
 import { createWsServer, type WsServerInstance } from './ws/server.js';
 import { SessionRegistry } from './registry/session-registry.js';
 import { ApprovalManager } from './approval-manager.js';
@@ -25,7 +25,7 @@ let ws:   WsServerInstance;
 let restPort: number;
 let wsPort:   number;
 let broadcasts: object[];
-let onPreToolUseApproval: ((env: any) => Promise<any>) | undefined;
+let onPreToolUseApproval: NonNullable<RestServerDeps['onPreToolUseApproval']> | undefined;
 
 beforeEach(async () => {
   registry  = new SessionRegistry();
@@ -138,6 +138,42 @@ function findResolvedFrame(reqId: string): ResolvedFrame | undefined {
   );
 }
 
+async function rebuildWithFastTimeout(timeoutMs = 30): Promise<void> {
+  await rest.close();
+  await ws.close();
+
+  registry  = new SessionRegistry();
+  approvals = new ApprovalManager({ defaultTimeoutMs: timeoutMs });
+  let wsRef: WsServerInstance | undefined;
+  const adapters = createApprovalAdapters({
+    registry, approvals,
+    approvalGate: parsePolicy('always'),
+    getWs: () => wsRef,
+  });
+  rest = createRestServer({ registry, approvals, ...adapters.restDeps });
+  ws   = createWsServer({
+    registry,
+    bus:        new EventBus(),
+    tap:        new PtyTap({ ringBytes: 1024 }),
+    staticDir:  null,
+    approvals,
+    onInput:    async () => ({ ok: true }),
+    ...adapters.wsDeps,
+  });
+  broadcasts = [];
+  const realBroadcast = ws.broadcast.bind(ws);
+  ws.broadcast = (msg: object, filter?: (caps: string[]) => boolean): void => {
+    broadcasts.push(msg);
+    realBroadcast(msg, filter);
+  };
+  wsRef = ws;
+  registry.on('session-removed', adapters.onSessionRemoved);
+  await rest.listen(0, '127.0.0.1');
+  await ws.listen(0, '127.0.0.1');
+  restPort = rest.address().port;
+  wsPort   = ws.address().port;
+}
+
 // ---- tests ----
 
 describe('createApprovalAdapters — factory contract shape', () => {
@@ -176,7 +212,10 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
     // Trigger an approval via onPreToolUseApproval, which will populate
     // pendingHandlers and broadcast the session.prompt-request frame.
     const decisionPromise = onPreToolUseApproval?.({
+      agent: 'claude-code',
       sessionId: sid,
+      ts: Date.now(),
+      event: 'PreToolUse',
       raw: {
         tool_name: 'Bash',
         tool_input: { command: 'ls' },
@@ -201,7 +240,7 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
       type: 'prompt-response',
       sessionId: sid,
       requestId,
-      answers: [{ questionIndex: 0, selectedKeys: ['allow'] }],
+      answers: [{ questionIndex: 0, selectedKeys: ['yes'] }],
     }));
 
     await waitFor(() => findResolvedFrame(requestId) !== undefined);
@@ -244,41 +283,7 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
   });
 
   it('timeout (PreToolUse) → resolvedBy = null', async () => {
-    // Tear down the fixture-default 1000ms hub.
-    await rest.close();
-    await ws.close();
-
-    // Rebuild with a fast 30ms approval timeout so onExpire fires quickly.
-    registry  = new SessionRegistry();
-    approvals = new ApprovalManager({ defaultTimeoutMs: 30 });
-    let wsRef: WsServerInstance | undefined;
-    const adapters = createApprovalAdapters({
-      registry, approvals,
-      approvalGate: parsePolicy('always'),
-      getWs: () => wsRef,
-    });
-    rest = createRestServer({ registry, approvals, ...adapters.restDeps });
-    ws   = createWsServer({
-      registry,
-      bus:        new EventBus(),
-      tap:        new PtyTap({ ringBytes: 1024 }),
-      staticDir:  null,
-      approvals,
-      onInput:    async () => ({ ok: true }),
-      ...adapters.wsDeps,
-    });
-    broadcasts = [];
-    const realBroadcast = ws.broadcast.bind(ws);
-    ws.broadcast = (msg: object, filter?: (caps: string[]) => boolean): void => {
-      broadcasts.push(msg);
-      realBroadcast(msg, filter);
-    };
-    wsRef = ws;
-    registry.on('session-removed', adapters.onSessionRemoved);
-    await rest.listen(0, '127.0.0.1');
-    await ws.listen(0, '127.0.0.1');
-    restPort = rest.address().port;
-    wsPort   = ws.address().port;
+    await rebuildWithFastTimeout();
 
     // ---- Now drive the test ----
     const sid = registerSession();
@@ -342,41 +347,7 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
   });
 
   it('timeout (PermissionRequest) → resolvedBy = null', async () => {
-    // Tear down the fixture-default 1000ms hub.
-    await rest.close();
-    await ws.close();
-
-    // Rebuild with a fast 30ms approval timeout so onExpire fires quickly.
-    registry  = new SessionRegistry();
-    approvals = new ApprovalManager({ defaultTimeoutMs: 30 });
-    let wsRef: WsServerInstance | undefined;
-    const adapters = createApprovalAdapters({
-      registry, approvals,
-      approvalGate: parsePolicy('always'),
-      getWs: () => wsRef,
-    });
-    rest = createRestServer({ registry, approvals, ...adapters.restDeps });
-    ws   = createWsServer({
-      registry,
-      bus:        new EventBus(),
-      tap:        new PtyTap({ ringBytes: 1024 }),
-      staticDir:  null,
-      approvals,
-      onInput:    async () => ({ ok: true }),
-      ...adapters.wsDeps,
-    });
-    broadcasts = [];
-    const realBroadcast = ws.broadcast.bind(ws);
-    ws.broadcast = (msg: object, filter?: (caps: string[]) => boolean): void => {
-      broadcasts.push(msg);
-      realBroadcast(msg, filter);
-    };
-    wsRef = ws;
-    registry.on('session-removed', adapters.onSessionRemoved);
-    await rest.listen(0, '127.0.0.1');
-    await ws.listen(0, '127.0.0.1');
-    restPort = rest.address().port;
-    wsPort   = ws.address().port;
+    await rebuildWithFastTimeout();
 
     // ---- Drive the test ----
     const sid = registerSession();
