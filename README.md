@@ -169,18 +169,23 @@ per-session temp file. User-visible behavior is unchanged.
 
 ## Permission gating
 
-Sesshin observes Claude Code's `PreToolUse` hook and is mode-aware. In
-`auto`, `acceptEdits`, `bypassPermissions`, `dontAsk`, or `plan` mode
-sesshin is transparent: no remote prompt is raised and the tool call
-proceeds under claude's own policy. In `default` mode, write-class tools
-(`Bash`, `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `PowerShell`,
-`WebFetch`) trigger a `session.prompt-request` that the web user can
-answer.
+Sesshin's only approval path is Claude Code's `PermissionRequest` HTTP
+hook. When Claude decides a tool call needs approval, it POSTs the
+request to the hub's `/permission/:sessionId` route; the hub renders a
+uniform `session.prompt-request`, waits for a remote answer, and returns
+Claude's expected `{ behavior: 'allow' | 'deny', ... }` response shape.
 
-If no client is currently subscribed for that session, sesshin steps
-aside and lets claude's TUI prompt the laptop user as normal. So the
-mental model is: **open the web UI to take over, close it to give
-control back to the laptop.**
+If no `actions`-capable client is currently subscribed for that session,
+sesshin steps aside and returns 204 so claude's TUI prompt can take over
+on the laptop. So the mental model is: **open the web UI to take over,
+close it to give control back to the laptop.** Main-thread calls fail
+open to TUI; subagent calls fail closed to an explicit deny because
+Claude's headless subagent path has no TUI fallback.
+
+Sesshin no longer maintains its own parallel trust list. Whether a tool
+fires `PermissionRequest` at all is determined by Claude's own
+permission-rule system (settings.json plus session-scoped `addRules`
+updates emitted by sesshin's tool handlers).
 
 Environment variables:
 
@@ -200,6 +205,7 @@ and per-session controls inside Claude Code:
 | `/sesshin-gate`    | Override gate policy for this session |
 | `/sesshin-pin`     | Sticky note shown on remote clients |
 | `/sesshin-quiet`   | Suspend remote notifications for a duration |
+| `/sesshin-log`     | Print transcript path or filter the JSONL log |
 
 Install them once with:
 

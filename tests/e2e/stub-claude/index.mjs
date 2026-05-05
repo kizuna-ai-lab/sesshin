@@ -39,23 +39,48 @@ const transcriptPath = (() => {
 
 mkdirSync(dirname(transcriptPath), { recursive: true });
 
-function fireHook(event, payload) {
+function fireCommandHook(event, payload) {
   const cmdStr = settings.hooks[event]?.[0]?.hooks?.[0]?.command ?? '';
   const parts = cmdStr.split(' ');
   if (parts.length === 0 || !parts[0]) return null;
   // Pass through to the binary unchanged. /usr/bin/env handles VAR=val
   // arguments natively, so we don't need to lift them into our own env map.
-  const r = spawnSync(parts[0], parts.slice(1), { input: JSON.stringify(payload), env: process.env, encoding: 'utf-8' });
-  // For PreToolUse, claude reads stdout for the permission decision.
-  if (event === 'PreToolUse') {
-    try {
-      const out = JSON.parse(r.stdout ?? '');
-      const d = out?.hookSpecificOutput?.permissionDecision;
-      if (d === 'allow' || d === 'deny' || d === 'ask') return d;
-    } catch { /* fall through */ }
-    return 'ask';
-  }
+  spawnSync(parts[0], parts.slice(1), { input: JSON.stringify(payload), env: process.env, encoding: 'utf-8' });
   return null;
+}
+
+function firePermissionRequest(payload) {
+  const url = settings.hooks?.PermissionRequest?.[0]?.hooks?.[0]?.url ?? '';
+  if (!url) return 'ask';
+  const r = spawnSync('node', ['-e', `
+const url = process.argv[1];
+const body = process.argv[2];
+fetch(url, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body,
+}).then(async (res) => {
+  const text = await res.text();
+  process.stdout.write(JSON.stringify({ status: res.status, text }));
+}).catch((err) => {
+  process.stderr.write(String(err));
+  process.exit(1);
+});
+`, url, JSON.stringify(payload)], { env: process.env, encoding: 'utf-8' });
+  if (r.status !== 0) return 'ask';
+  try {
+    const out = JSON.parse(r.stdout ?? '');
+    if (out.status === 204) return 'ask';
+    const parsed = JSON.parse(out.text ?? '{}');
+    const d = parsed?.hookSpecificOutput?.decision?.behavior;
+    if (d === 'allow' || d === 'deny') return d;
+  } catch { /* fall through */ }
+  return 'ask';
+}
+
+function fireHook(event, payload) {
+  if (event === 'PermissionRequest') return firePermissionRequest(payload);
+  return fireCommandHook(event, payload);
 }
 
 function writeJsonl(line) { appendFileSync(transcriptPath, JSON.stringify(line) + '\n'); }
@@ -67,9 +92,20 @@ writeJsonl({ type: 'user', message: { content: prompt }, timestamp: new Date().t
 fireHook('UserPromptSubmit', { hook_event_name: 'UserPromptSubmit', prompt });
 
 setTimeout(() => {
-  // Use Bash with permission_mode=default so the gate triggers (Read would
-  // be auto-allowed by the policy and skip the approval flow entirely).
-  const decision = fireHook('PreToolUse', { hook_event_name: 'PreToolUse', permission_mode: 'default', tool_name: 'Bash', tool_input: { command: 'echo hi' }, tool_use_id: 'toolu_stub_1' });
+  // PermissionRequest is sesshin's only approval gate now. Keep firing
+  // PreToolUse for observability/state-machine updates, but read the
+  // approval decision from the PermissionRequest HTTP hook response.
+  fireHook('PreToolUse', { hook_event_name: 'PreToolUse', permission_mode: 'default', tool_name: 'Bash', tool_input: { command: 'echo hi' }, tool_use_id: 'toolu_stub_1' });
+  const decision = fireHook('PermissionRequest', {
+    session_id: sessionId,
+    hook_event_name: 'PermissionRequest',
+    permission_mode: 'default',
+    tool_name: 'Bash',
+    tool_input: { command: 'echo hi' },
+    tool_use_id: 'toolu_stub_1',
+    transcript_path: transcriptPath,
+    cwd: process.cwd(),
+  });
   if (decision === 'deny') {
     fireHook('PostToolUse', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_response: 'denied by remote approver' });
   } else {

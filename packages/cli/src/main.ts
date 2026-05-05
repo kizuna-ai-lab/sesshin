@@ -79,9 +79,12 @@ async function dispatch(deps: MainDeps, cmd: string | undefined, rest: string[])
     }
     case 'commands': {
       const sub = rest[0];
-      if (sub === 'install')   return runCommandsInstall();
+      if (sub === 'install') {
+        const pruneOnly = rest.includes('--prune-only');
+        return runCommandsInstall({ pruneOnly });
+      }
       if (sub === 'uninstall') return runCommandsUninstall();
-      deps.stderr.write('usage: sesshin commands <install|uninstall>\n');
+      deps.stderr.write('usage: sesshin commands <install [--prune-only]|uninstall>\n');
       return 2;
     }
     case 'gate': {
