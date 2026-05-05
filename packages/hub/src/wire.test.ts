@@ -317,6 +317,30 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
     expect(r.status).toBe(200);
   });
 
+  it('cancelled-no-clients → resolvedBy = null', async () => {
+    const sid = registerSession();
+    const { request } = approvals.open({
+      sessionId: sid, tool: 'Bash', toolInput: { command: 'ls' },
+      origin: 'permission', questions: [],
+    });
+
+    const client = await connectClient(['actions', 'state']);
+    client.send(JSON.stringify({ type: 'subscribe', sessions: [sid], since: null }));
+    // Wait until the WS server's actions-counter has registered the
+    // subscription (so the close → counter-zero transition can fire).
+    await waitFor(() => ws.hasSubscribedActionsClient(sid));
+
+    // Closing the only actions-cap subscriber drops the per-session
+    // actions count to zero → onLastActionsClientGone fires.
+    client.close();
+
+    await waitFor(() => findResolvedFrame(request.requestId) !== undefined);
+    const frame = findResolvedFrame(request.requestId)!;
+    expect(frame.reason).toBe('cancelled-no-clients');
+    expect(frame.resolvedBy).toBeNull();
+    expect(frame.sessionId).toBe(sid);
+  });
+
   it('timeout (PermissionRequest) → resolvedBy = null', async () => {
     // Tear down the fixture-default 1000ms hub.
     await rest.close();
