@@ -75,6 +75,14 @@ describe('SessionPromptRequestResolvedSchema additions', () => {
     });
     expect(r.reason).toBe('cancelled-tool-completed');
   });
+
+  it('accepts child-session-changed as a reason value', () => {
+    const r = SessionPromptRequestResolvedSchema.parse({
+      ...base, reason: 'child-session-changed', resolvedBy: null,
+    });
+    expect(r.reason).toBe('child-session-changed');
+    expect(r.resolvedBy).toBeNull();
+  });
 });
 
 describe('SessionConfigChangedSchema', () => {

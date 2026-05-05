@@ -8,6 +8,7 @@ import { SessionRegistry } from './registry/session-registry.js';
 import { Checkpoint } from './registry/checkpoint.js';
 import { EventBus } from './event-bus.js';
 import { wireHookIngest } from './observers/hook-ingest.js';
+import type { HookEnvelope } from './agents/claude/normalize-hook.js';
 import { wireJsonlModeTracker } from './observers/jsonl-mode-tracker.js';
 import { wirePtyIdleWatcher, type IdleWatcherConfig } from './observers/pty-idle-watcher.js';
 import { wireStateMachine } from './state-machine/applier.js';
@@ -49,6 +50,12 @@ export interface ApprovalAdapters {
     onPromptResponse:        NonNullable<WsServerDeps['onPromptResponse']>;
   };
   onSessionRemoved: (sessionId: string) => void;
+  // Phase B4: invoked by the wire-level boundary handler when a Claude
+  // session boundary is detected (raw.session_id changed on SessionStart).
+  // Cancels any pending approvals tied to the OUTGOING child and broadcasts
+  // session.prompt-request.resolved with reason=child-session-changed and
+  // resolvedBy=null. Mirrors onSessionRemoved's shape.
+  onClaudeSessionBoundary: (sessionId: string) => void;
 }
 
 export function createApprovalAdapters(opts: {
@@ -399,6 +406,25 @@ export function createApprovalAdapters(opts: {
     approvals.cancelForSession(id);
   };
 
+  // Phase B4: child Claude session boundary. Same shape as
+  // onSessionRemoved, but the parent sesshin session lives on — only the
+  // Claude conversation underneath has changed. Pending approvals tied to
+  // the OUTGOING child cannot be answered (Claude won't reuse the old
+  // toolUseIds), so we cancel them with reason=child-session-changed.
+  const onClaudeSessionBoundary = (id: string): void => {
+    for (const a of approvals.pendingForSession(id)) {
+      pendingHandlers.delete(a.requestId);
+      pendingUpdatedInput.delete(a.requestId);
+      pendingUpdatedPermissions.delete(a.requestId);
+      getWs()?.broadcast({
+        type: 'session.prompt-request.resolved',
+        sessionId: id, requestId: a.requestId,
+        reason: 'child-session-changed', resolvedBy: null,
+      });
+    }
+    approvals.cancelForSession(id);
+  };
+
   return {
     restDeps: {
       onApprovalsCleanedUp,
@@ -411,6 +437,107 @@ export function createApprovalAdapters(opts: {
       onPromptResponse,
     },
     onSessionRemoved,
+    onClaudeSessionBoundary,
+  };
+}
+
+/**
+ * Phase B4: detect Claude-session boundary on each hook event.
+ *
+ * SessionStart with raw.session_id !== current claudeSessionId means /clear,
+ * --resume, or fresh startup (compact reuses the same id and is naturally
+ * excluded). On boundary:
+ *   1. Cancel pending approvals tied to the outgoing child via
+ *      onClaudeSessionBoundary.
+ *   2. Reset child-scoped registry state (file cursor, last summary).
+ *   3. Update claudeSessionId to the new value.
+ *   4. Broadcast session.child-changed with reason derived from raw.source.
+ *
+ * SessionEnd clears claudeSessionId (when currently set) and broadcasts
+ * session.child-changed with claudeSessionId=null and reason='session-end'.
+ *
+ * The optional onTranscriptPathChanged callback is invoked AFTER boundary
+ * detection when SessionStart delivers a new raw.transcript_path that
+ * differs from the registry's stored sessionFilePath. startHub uses this
+ * to restart the JSONL tail.
+ */
+export function createHookEventInterceptor(deps: {
+  registry: SessionRegistry;
+  getWs:    () => WsServerInstance | undefined;
+  onClaudeSessionBoundary: (sessionId: string) => void;
+  onTranscriptPathChanged?: (sessionId: string, newPath: string) => void;
+  inner:    (env: HookEnvelope) => void;
+}): (env: HookEnvelope) => void {
+  const { registry, getWs, onClaudeSessionBoundary, onTranscriptPathChanged, inner } = deps;
+
+  return (env: HookEnvelope): void => {
+    // Phase B4: detect Claude-session boundary. Claude's session_id rides
+    // in env.raw.session_id. A change vs. the current claudeSessionId means
+    // /clear, --resume, or fresh startup — /compact reuses the same id and
+    // is naturally excluded by the equality check.
+    if (env.event === 'SessionStart' && typeof env.raw['session_id'] === 'string') {
+      const newClaudeId = env.raw['session_id'] as string;
+      const rec = registry.get(env.sessionId);
+      const prevClaudeId = rec?.claudeSessionId ?? null;
+      if (rec && prevClaudeId !== newClaudeId) {
+        // Boundary. Cancel any pending approvals tied to the OUTGOING child
+        // before mutating registry state — same shape as onSessionRemoved.
+        onClaudeSessionBoundary(env.sessionId);
+
+        // Reset child-scoped state (file cursor, lastSummaryId). Note:
+        // sessionFilePath is left to the transcript-path fixup below;
+        // setSessionFilePath also zeroes fileTailCursor when the path
+        // actually changes, so the cursor reset here is redundant in the
+        // common case but harmless.
+        registry.resetChildScopedState(env.sessionId);
+        registry.setClaudeSessionId(env.sessionId, newClaudeId);
+
+        const rawSource = env.raw['source'];
+        const reason: 'startup' | 'clear' | 'resume' | 'unknown' =
+          rawSource === 'startup' || rawSource === 'clear' || rawSource === 'resume'
+            ? rawSource
+            : 'unknown';
+        getWs()?.broadcast({
+          type: 'session.child-changed',
+          sessionId:               env.sessionId,
+          previousClaudeSessionId: prevClaudeId,
+          claudeSessionId:         newClaudeId,
+          reason,
+        });
+      }
+    }
+
+    // Existing transcript-path fixup. Runs AFTER boundary detection so the
+    // new path is associated with the new child id. setSessionFilePath only
+    // returns true if the path actually changed; on change we restart the
+    // tail via the caller-provided callback.
+    if (env.event === 'SessionStart' && typeof env.raw['transcript_path'] === 'string') {
+      const tp = env.raw['transcript_path'] as string;
+      if (registry.setSessionFilePath(env.sessionId, tp)) {
+        log.info({ sessionId: env.sessionId, transcriptPath: tp }, 'updated sessionFilePath from SessionStart');
+        onTranscriptPathChanged?.(env.sessionId, tp);
+      }
+    }
+
+    // Phase B4: SessionEnd → clear current child id, broadcast.
+    // SessionEnd does NOT cancel pending approvals here; onSessionRemoved
+    // handles that when the parent sesshin session is actually removed.
+    // SessionEnd from Claude is just the conversation closing.
+    if (env.event === 'SessionEnd') {
+      const rec = registry.get(env.sessionId);
+      const prev = rec?.claudeSessionId ?? null;
+      if (prev !== null && registry.clearClaudeSessionId(env.sessionId)) {
+        getWs()?.broadcast({
+          type: 'session.child-changed',
+          sessionId:               env.sessionId,
+          previousClaudeSessionId: prev,
+          claudeSessionId:         null,
+          reason:                  'session-end',
+        });
+      }
+    }
+
+    inner(env);
   };
 }
 
@@ -489,19 +616,6 @@ export async function startHub(): Promise<HubInstance> {
       initialCursor: s.fileTailCursor,
     }));
   };
-  const onHookEvent: typeof innerHookEvent = (env) => {
-    if (env.event === 'SessionStart' && typeof env.raw['transcript_path'] === 'string') {
-      const tp = env.raw['transcript_path'] as string;
-      if (registry.setSessionFilePath(env.sessionId, tp)) {
-        log.info({ sessionId: env.sessionId, transcriptPath: tp }, 'updated sessionFilePath from SessionStart');
-        stopTails.get(env.sessionId)?.();
-        stopTails.delete(env.sessionId);
-        startTail(env.sessionId);
-      }
-    }
-    innerHookEvent(env);
-  };
-
   registry.on('session-added', (info) => startTail(info.id));
   registry.on('session-removed', (id) => {
     stopTails.get(id)?.();
@@ -526,6 +640,22 @@ export async function startHub(): Promise<HubInstance> {
   let wsRef: WsServerInstance | undefined;
   const adapters = createApprovalAdapters({
     registry, approvals, approvalGate, getWs: () => wsRef,
+  });
+
+  // Phase B4: wrap the inner hook handler with boundary detection +
+  // transcript-path fixup. Built here (after createApprovalAdapters) so it
+  // can reference adapters.onClaudeSessionBoundary; built BEFORE
+  // createRestServer so the wrapped handler is the one captured by REST.
+  const onHookEvent = createHookEventInterceptor({
+    registry,
+    getWs: () => wsRef,
+    onClaudeSessionBoundary: adapters.onClaudeSessionBoundary,
+    onTranscriptPathChanged: (id) => {
+      stopTails.get(id)?.();
+      stopTails.delete(id);
+      startTail(id);
+    },
+    inner: innerHookEvent,
   });
 
   // REST server

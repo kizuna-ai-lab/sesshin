@@ -168,3 +168,30 @@ become `attention` notifications back to the originating adapter.
 If both laptop and a remote source attempt to inject input simultaneously
 during `awaiting-input`, the laptop wins and the remote item is queued
 behind it.
+
+## Parent vs child Claude session
+
+A sesshin session id (`SessionInfo.id`) is bound to the sesshin process
+lifetime — stable across the user's `/clear`, `--resume`, and `/compact`. It
+owns parent-scoped state: WS client subscriptions, sticky pin, quiet-until
+window, gate override, claude allow rules, sessionAllowList.
+
+A Claude session id (`SessionInfo.claudeSessionId`) is Claude Code's own
+conversation id. It changes on `SessionStart` with `source: startup | clear
+| resume`, stays the same on `compact`, and goes back to `null` on
+`SessionEnd`. It owns child-scoped state: transcript file path, file tail
+cursor, last summary id, pending approvals (because Claude won't reuse the
+old `tool_use_id`s after a boundary).
+
+The hub detects boundary transitions by comparing `raw.session_id` against
+the current `claudeSessionId` on each `SessionStart` and broadcasts
+`session.child-changed` (gated on the `state` capability) when they differ.
+The boundary handler also resets child-scoped registry state and cancels
+any pending approvals tied to the outgoing child — those are resolved as
+`session.prompt-request.resolved` with `reason: child-session-changed` and
+`resolvedBy: null`. `SessionEnd` similarly clears `claudeSessionId` and
+broadcasts `session.child-changed` with `claudeSessionId: null` and
+`reason: session-end`; pending approvals are NOT cancelled here (the
+parent session is still alive, just the conversation closed —
+`onSessionRemoved` handles approval cancellation when the parent session
+itself is unregistered).

@@ -169,6 +169,13 @@ export const SessionPromptRequestResolvedSchema = z.object({
     'cancelled-no-clients',
     'cancelled-tool-completed',
     'session-ended',
+    // child-session-changed: the underlying Claude conversation crossed a
+    // session boundary (raw.session_id changed via /clear, --resume, or
+    // fresh startup) while this approval was still pending. The outgoing
+    // child can no longer answer it, so we resolve it as a system-initiated
+    // cancellation (resolvedBy: null). Emitted from wire.ts boundary
+    // detection alongside session.child-changed.
+    'child-session-changed',
   ]),
   // Identifies who caused the resolution. Lets clients render UX
   // distinguishing "approved by another client" from system-initiated

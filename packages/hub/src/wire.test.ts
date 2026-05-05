@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import WebSocket from 'ws';
-import { createApprovalAdapters } from './wire.js';
+import { createApprovalAdapters, createHookEventInterceptor } from './wire.js';
 import { createRestServer, type RestServer, type RestServerDeps } from './rest/server.js';
 import { createWsServer, type WsServerInstance } from './ws/server.js';
 import { SessionRegistry } from './registry/session-registry.js';
@@ -197,6 +197,7 @@ describe('createApprovalAdapters — factory contract shape', () => {
       'onPromptResponse',
     ]);
     expect(typeof adapters.onSessionRemoved).toBe('function');
+    expect(typeof adapters.onClaudeSessionBoundary).toBe('function');
   });
 });
 
@@ -394,5 +395,218 @@ describe('wire.ts approval adapters — resolvedBy attribution', () => {
     expect(frame.reason).toBe('session-ended');
     expect(frame.resolvedBy).toBeNull();
     expect(frame.sessionId).toBe(sid);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Phase B4: child Claude session boundary tests.
+//
+// These tests exercise createHookEventInterceptor — the wrapper around the
+// wireHookIngest output that startHub uses in production. We don't need a
+// real wireHookIngest here; we pass a stub `inner` to verify it is always
+// called after boundary handling.
+//
+// Setup mirrors the createApprovalAdapters scaffold above so the same
+// `broadcasts` capture works for both child-changed events (broadcast
+// directly from the interceptor) and prompt-request.resolved events
+// (broadcast via adapters.onClaudeSessionBoundary).
+// -----------------------------------------------------------------------------
+
+describe('child Claude session boundary (Phase B4)', () => {
+  let innerCalls: object[];
+  let onHookEvent: (env: { agent: string; sessionId: string; ts: number; event: string; raw: Record<string, unknown> }) => void;
+
+  beforeEach(() => {
+    innerCalls = [];
+    // Re-derive adapters against the outer beforeEach's registry/approvals/ws
+    // so we exercise the exact production cancel + broadcast shape rather
+    // than reimplementing it in the test. The outer beforeEach already
+    // installed adapters.onSessionRemoved on registry; we don't reinstall
+    // anything from this freshly-derived set — we only borrow
+    // onClaudeSessionBoundary.
+    const adapters = createApprovalAdapters({
+      registry, approvals, approvalGate: parsePolicy('always'), getWs: () => ws,
+    });
+    onHookEvent = createHookEventInterceptor({
+      registry,
+      getWs: () => ws,
+      onClaudeSessionBoundary: adapters.onClaudeSessionBoundary,
+      // No onTranscriptPathChanged in tests — we don't tail any files.
+      inner: (env) => { innerCalls.push(env); },
+    });
+  });
+
+  it('first SessionStart sets claudeSessionId from raw.session_id', () => {
+    const sid = registerSession();
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 1, event: 'SessionStart',
+      raw: { session_id: 'cc-1', source: 'startup', transcript_path: '/tmp/cc-1.jsonl' },
+    });
+    expect(registry.get(sid)?.claudeSessionId).toBe('cc-1');
+    // child-changed broadcast fired
+    const ev = broadcasts.find((b) => (b as any).type === 'session.child-changed');
+    expect(ev).toMatchObject({
+      sessionId: sid, previousClaudeSessionId: null,
+      claudeSessionId: 'cc-1', reason: 'startup',
+    });
+    // inner handler was still called
+    expect(innerCalls.length).toBe(1);
+  });
+
+  it('same raw.session_id on subsequent SessionStart does NOT broadcast child-changed', () => {
+    const sid = registerSession();
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 1, event: 'SessionStart',
+      raw: { session_id: 'cc-1', source: 'startup' },
+    });
+    const before = broadcasts.length;
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 2, event: 'SessionStart',
+      raw: { session_id: 'cc-1', source: 'compact' },
+    });
+    expect(
+      broadcasts.slice(before).find((b) => (b as any).type === 'session.child-changed'),
+    ).toBeUndefined();
+  });
+
+  it('different raw.session_id triggers child-changed and resets child-scoped state', () => {
+    const sid = registerSession();
+    // Prime with cc-1.
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 1, event: 'SessionStart',
+      raw: { session_id: 'cc-1', source: 'startup' },
+    });
+    // Dirty child-scoped state.
+    registry.setFileCursor(sid, 500);
+    registry.setLastSummary(sid, 'sum-1');
+    expect(registry.get(sid)?.fileTailCursor).toBe(500);
+    expect(registry.get(sid)?.lastSummaryId).toBe('sum-1');
+
+    const before = broadcasts.length;
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 2, event: 'SessionStart',
+      raw: { session_id: 'cc-2', source: 'clear' },
+    });
+    expect(registry.get(sid)?.claudeSessionId).toBe('cc-2');
+    expect(registry.get(sid)?.fileTailCursor).toBe(0);
+    expect(registry.get(sid)?.lastSummaryId).toBeNull();
+    const ev = broadcasts.slice(before).find((b) => (b as any).type === 'session.child-changed');
+    expect(ev).toMatchObject({
+      sessionId: sid, previousClaudeSessionId: 'cc-1',
+      claudeSessionId: 'cc-2', reason: 'clear',
+    });
+  });
+
+  it.each([
+    ['startup', 'startup'],
+    ['clear',   'clear'],
+    ['resume',  'resume'],
+    ['compact', 'unknown'],   // unrecognized here (boundary should rarely fire on compact, but defensive)
+    [undefined, 'unknown'],   // missing source
+    ['nonsense','unknown'],   // unrecognized
+  ])('reason mapping: raw.source=%j → reason=%s', (source, expected) => {
+    const sid = registerSession();
+    // Each sub-case needs a fresh registry record so the boundary fires.
+    // Use a unique outgoing claude id so the equality check sees a change.
+    const newCcId = `cc-${expected}-${Math.random()}`;
+    const raw: Record<string, unknown> = { session_id: newCcId };
+    if (source !== undefined) raw['source'] = source;
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 1, event: 'SessionStart', raw,
+    });
+    const ev = broadcasts.findLast((b) => (b as any).type === 'session.child-changed' && (b as any).sessionId === sid);
+    expect(ev).toBeDefined();
+    expect((ev as any).reason).toBe(expected);
+  });
+
+  it('SessionEnd clears claudeSessionId and broadcasts child-changed (reason=session-end)', () => {
+    const sid = registerSession();
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 1, event: 'SessionStart',
+      raw: { session_id: 'cc-2', source: 'startup' },
+    });
+    expect(registry.get(sid)?.claudeSessionId).toBe('cc-2');
+
+    const before = broadcasts.length;
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 4, event: 'SessionEnd',
+      raw: { session_id: 'cc-2' },
+    });
+    expect(registry.get(sid)?.claudeSessionId).toBeNull();
+    const ev = broadcasts.slice(before).findLast(
+      (b) => (b as any).type === 'session.child-changed',
+    );
+    expect(ev).toMatchObject({
+      sessionId: sid, previousClaudeSessionId: 'cc-2',
+      claudeSessionId: null, reason: 'session-end',
+    });
+  });
+
+  it('SessionEnd when claudeSessionId is already null is a no-op (no broadcast)', () => {
+    const sid = registerSession();   // fresh, no SessionStart yet
+    const before = broadcasts.length;
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 5, event: 'SessionEnd', raw: {},
+    });
+    expect(
+      broadcasts.slice(before).find((b) => (b as any).type === 'session.child-changed'),
+    ).toBeUndefined();
+  });
+
+  it('boundary cancels pending approvals with reason=child-session-changed', () => {
+    const sid = registerSession();
+    // Prime with cc-1 so the next SessionStart triggers a real boundary.
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 1, event: 'SessionStart',
+      raw: { session_id: 'cc-1', source: 'startup' },
+    });
+    // Open an approval under cc-1.
+    const { request } = approvals.open({
+      sessionId: sid, tool: 'Bash', toolInput: { command: 'ls' },
+      origin: 'permission', questions: [],
+    });
+    expect(approvals.pendingForSession(sid).length).toBe(1);
+
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 2, event: 'SessionStart',
+      raw: { session_id: 'cc-2', source: 'resume' },
+    });
+
+    expect(approvals.pendingForSession(sid).length).toBe(0);
+    const resolved = findResolvedFrame(request.requestId);
+    expect(resolved).toBeDefined();
+    expect(resolved!.reason).toBe('child-session-changed');
+    expect(resolved!.resolvedBy).toBeNull();
+  });
+
+  it('transcript-path fixup still runs alongside boundary detection', () => {
+    const sid = registerSession();
+    // Original sessionFilePath was '/x/session.jsonl' from registerSession.
+    // Fire SessionStart with both new session_id AND new transcript_path.
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 1, event: 'SessionStart',
+      raw: {
+        session_id:      'cc-1',
+        source:          'startup',
+        transcript_path: '/tmp/new-transcript.jsonl',
+      },
+    });
+    const rec = registry.get(sid);
+    expect(rec?.claudeSessionId).toBe('cc-1');
+    expect(rec?.sessionFilePath).toBe('/tmp/new-transcript.jsonl');
+  });
+
+  it('non-SessionStart / non-SessionEnd events are passed through without boundary work', () => {
+    const sid = registerSession();
+    const before = broadcasts.length;
+    onHookEvent({
+      agent: 'claude-code', sessionId: sid, ts: 1, event: 'PreToolUse',
+      raw: { tool_name: 'Bash', tool_input: { command: 'ls' }, session_id: 'cc-x' },
+    });
+    expect(
+      broadcasts.slice(before).find((b) => (b as any).type === 'session.child-changed'),
+    ).toBeUndefined();
+    expect(registry.get(sid)?.claudeSessionId).toBeNull();
+    expect(innerCalls.length).toBe(1);
   });
 });
