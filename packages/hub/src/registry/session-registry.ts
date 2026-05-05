@@ -142,6 +142,39 @@ export class SessionRegistry extends EventEmitter {
     return true;
   }
 
+  setClaudeSessionId(id: string, claudeId: string): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    if (s.claudeSessionId === claudeId) return false;
+    s.claudeSessionId = claudeId;
+    this.emit('config-changed', this.publicView(s));
+    return true;
+  }
+
+  clearClaudeSessionId(id: string): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    if (s.claudeSessionId === null) return false;
+    s.claudeSessionId = null;
+    this.emit('config-changed', this.publicView(s));
+    return true;
+  }
+
+  /**
+   * Reset state scoped to a single Claude conversation. Called on
+   * child-session boundary (new claude session_id observed). Parent-scoped
+   * state — pin, quietUntil, sessionGateOverride, claudeAllowRules,
+   * client subscriptions — is untouched. sessionFilePath is left alone too
+   * because setSessionFilePath resets it (and the tail cursor) when
+   * SessionStart delivers the new transcript_path.
+   */
+  resetChildScopedState(id: string): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    s.fileTailCursor = 0;
+    s.lastSummaryId = null;
+  }
+
   recordHeartbeat(id: string): boolean {
     const s = this.sessions.get(id);
     if (!s) return false;
