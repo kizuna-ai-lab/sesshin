@@ -22,6 +22,7 @@ import { runModeBPrime } from './summarizer/mode-b-prime.js';
 import { runModeB } from './summarizer/mode-b.js';
 import { wireSummarizerTrigger } from './summarizer-trigger.js';
 import { ApprovalManager } from './approval-manager.js';
+import type { ApprovalOutcome } from './approval-manager.js';
 import { parsePolicy, shouldGatePreToolUse } from './agents/claude/approval-policy.js';
 import { getHandler, setCatchAllToolName } from './agents/claude/tool-handlers/registry.js';
 import type { ToolHandler, HandlerCtx } from './agents/claude/tool-handlers/types.js';
@@ -193,7 +194,7 @@ export function createApprovalAdapters(opts: {
       // indefinitely. PreToolUse's wire response doesn't carry
       // updatedPermissions (that's PermissionRequest-only), but cleanup is
       // still needed in case the same handler set both fields.
-      let out: import('./approval-manager.js').ApprovalOutcome;
+      let out: ApprovalOutcome;
       let ui: Record<string, unknown> | undefined;
       try {
         out = await decision;
@@ -266,7 +267,7 @@ export function createApprovalAdapters(opts: {
 
       // Mirror of the PreToolUse adapter's try/finally — guarantees cleanup
       // on stale-cleanup / timeout / session-end paths too.
-      let out: import('./approval-manager.js').ApprovalOutcome;
+      let out: ApprovalOutcome;
       let ui: Record<string, unknown> | undefined;
       let up: PermissionUpdate[] | undefined;
       try {
@@ -403,7 +404,7 @@ export function createApprovalAdapters(opts: {
       onApprovalsCleanedUp,
       onPreToolUseApproval,
       onPermissionRequestApproval,
-      historyForSession: historyStore.get,
+      historyForSession: (sid, n) => historyStore.get(sid, n),
     },
     wsDeps: {
       onLastActionsClientGone,
