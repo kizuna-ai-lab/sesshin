@@ -424,3 +424,84 @@ describe('integration: PermissionRequest opt-in suppresses subsequent PreToolUse
     expect(resolvedDecision?.decision).toBe('deny');
   });
 });
+
+// Subagents (agent_id present) run headless inside Claude with no TUI fallback,
+// so a 204 passthrough on a subagent's PermissionRequest resolves to a silent
+// auto-deny on Claude's side. Branch the fallback: subagents fail-closed with
+// a diagnostic deny; main-thread keeps failing-open to 204.
+describe('PermissionRequest fallback by agent_id', () => {
+  it('subagent (agent_id present): handler throws → 200 deny with diagnostic message', async () => {
+    svr = createRestServer({
+      registry, approvals,
+      onPermissionRequestApproval: async () => { throw new Error('boom'); },
+    });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(PERM_BODY({ agent_id: 'sub-abc' })),
+    });
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.hookSpecificOutput.decision.behavior).toBe('deny');
+    expect(j.hookSpecificOutput.decision.message).toMatch(/sesshin/i);
+  });
+
+  it('subagent: handler returns null → 200 deny (no TUI fallback in headless)', async () => {
+    svr = createRestServer({
+      registry, approvals,
+      onPermissionRequestApproval: async () => null,
+    });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(PERM_BODY({ agent_id: 'sub-abc' })),
+    });
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.hookSpecificOutput.decision.behavior).toBe('deny');
+  });
+
+  it('subagent: no handler registered → 200 deny (headless can\'t fall back to TUI)', async () => {
+    svr = createRestServer({ registry, approvals });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(PERM_BODY({ agent_id: 'sub-abc' })),
+    });
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.hookSpecificOutput.decision.behavior).toBe('deny');
+    expect(j.hookSpecificOutput.decision.message).toMatch(/sesshin/i);
+  });
+
+  it('main thread (no agent_id): handler throws → 204 passthrough (TUI takes over)', async () => {
+    svr = createRestServer({
+      registry, approvals,
+      onPermissionRequestApproval: async () => { throw new Error('boom'); },
+    });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(PERM_BODY()),
+    });
+    expect(r.status).toBe(204);
+  });
+
+  it('main thread: handler returns null → 204 passthrough', async () => {
+    svr = createRestServer({
+      registry, approvals,
+      onPermissionRequestApproval: async () => null,
+    });
+    await svr.listen(0, '127.0.0.1');
+    port = svr.address().port;
+    const r = await fetch(`http://127.0.0.1:${port}/permission/s1`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(PERM_BODY()),
+    });
+    expect(r.status).toBe(204);
+  });
+});

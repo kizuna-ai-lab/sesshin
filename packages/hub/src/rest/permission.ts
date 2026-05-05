@@ -62,8 +62,22 @@ export async function handlePermissionRoute(
   };
   deps.onHookEvent?.(envelope);
 
-  // Dispatch — null means passthrough (204), otherwise emit the decision shape.
+  // Subagent context — agent_id is present iff the PermissionRequest fires
+  // inside a Task subagent. Subagents run headless inside Claude (no TUI
+  // fallback), so a 204 passthrough here resolves to a silent auto-deny on
+  // Claude's side. Surface an explicit deny with a diagnostic instead so
+  // the user sees why the subagent stalled.
+  // Reference: claude-code permissions.ts:932 (headless auto-deny path).
+  const isSubagent = typeof parsed.data.agent_id === 'string' && parsed.data.agent_id.length > 0;
+
+  const subagentDeny = (msg: string): void => {
+    sendDecision(res, { behavior: 'deny', message: msg });
+  };
+
+  // Dispatch — null means passthrough (204) on the main thread; subagents
+  // get an explicit deny instead. Otherwise emit the decision shape.
   if (!deps.onPermissionRequestApproval) {
+    if (isSubagent) { subagentDeny('sesshin: no remote approver wired (subagent)'); return; }
     res.writeHead(204).end();
     return;
   }
@@ -72,11 +86,22 @@ export async function handlePermissionRoute(
   try {
     decision = await deps.onPermissionRequestApproval(envelope);
   } catch {
-    // Throw → fall through to Claude TUI rather than fail-closed.
+    if (isSubagent) {
+      subagentDeny('sesshin: remote approver errored (subagent)');
+      return;
+    }
+    // Main thread: throw → fall through to Claude TUI rather than fail-closed.
     res.writeHead(204).end();
     return;
   }
-  if (decision === null) { res.writeHead(204).end(); return; }
+  if (decision === null) {
+    if (isSubagent) {
+      subagentDeny('sesshin: remote approver passed through (subagent has no TUI fallback)');
+      return;
+    }
+    res.writeHead(204).end();
+    return;
+  }
   sendDecision(res, decision);
 }
 
