@@ -9,6 +9,7 @@ import { EventBus } from './event-bus.js';
 import { PtyTap } from './observers/pty-tap.js';
 import { parsePolicy } from './agents/claude/approval-policy.js';
 import { randomUUID } from 'node:crypto';
+import { catchAllHandler } from './agents/claude/tool-handlers/catch-all.js';
 
 // Tests in this file exercise wire.ts's broadcast wiring via the
 // createApprovalAdapters factory. The WS server filters
@@ -25,12 +26,12 @@ let ws:   WsServerInstance;
 let restPort: number;
 let wsPort:   number;
 let broadcasts: object[];
+let onPreToolUseApproval: ((env: any) => Promise<any>) | undefined;
 
 beforeEach(async () => {
   registry  = new SessionRegistry();
-  // 50ms keeps the two timeout tests fast; matches the timer scale
-  // already used in connection.test.ts:286,288.
-  approvals = new ApprovalManager({ defaultTimeoutMs: 50 });
+  // 1s timeout for this test; timeout tests will override as needed.
+  approvals = new ApprovalManager({ defaultTimeoutMs: 1000 });
 
   let wsRef: WsServerInstance | undefined;
   const adapters = createApprovalAdapters({
@@ -38,6 +39,9 @@ beforeEach(async () => {
     approvalGate: parsePolicy('always'),  // force gate ON regardless of mode
     getWs: () => wsRef,
   });
+
+  // Store the onPreToolUseApproval callback for use in tests.
+  onPreToolUseApproval = adapters.restDeps.onPreToolUseApproval;
 
   rest = createRestServer({ registry, approvals, ...adapters.restDeps });
   ws   = createWsServer({
@@ -158,5 +162,58 @@ describe('createApprovalAdapters — factory contract shape', () => {
       'onPromptResponse',
     ]);
     expect(typeof adapters.onSessionRemoved).toBe('function');
+  });
+});
+
+describe('wire.ts approval adapters — resolvedBy attribution', () => {
+  it('decided → resolvedBy = remote-adapter:<clientKind>', async () => {
+    const sid = registerSession();
+
+    const client = await connectClient(['actions', 'state']);
+    client.send(JSON.stringify({ type: 'subscribe', sessions: [sid], since: null }));
+    // Give subscribe-time replay a beat to settle.
+    await delay(50);
+
+    // Trigger an approval via onPreToolUseApproval, which will populate
+    // pendingHandlers and broadcast the session.prompt-request frame.
+    const decisionPromise = onPreToolUseApproval?.({
+      sessionId: sid,
+      raw: {
+        tool_name: 'Bash',
+        tool_input: { command: 'ls' },
+        tool_use_id: randomUUID(),
+      },
+    }) ?? Promise.resolve(null);
+
+    // Give the approval request a beat to broadcast.
+    await delay(50);
+
+    // Find the requestId of the prompt-request that was just broadcast.
+    const promptFrame = broadcasts.find(
+      (f): f is any =>
+        (f as any).type === 'session.prompt-request'
+        && (f as any).sessionId === sid,
+    );
+    expect(promptFrame).toBeDefined();
+    const requestId = promptFrame!.requestId;
+
+    // Now send the prompt-response
+    client.send(JSON.stringify({
+      type: 'prompt-response',
+      sessionId: sid,
+      requestId,
+      answers: [{ questionIndex: 0, selectedKeys: ['allow'] }],
+    }));
+
+    await waitFor(() => findResolvedFrame(requestId) !== undefined);
+    const frame = findResolvedFrame(requestId)!;
+    expect(frame.reason).toBe('decided');
+    expect(frame.resolvedBy).toBe('remote-adapter:debug-web');
+    expect(frame.sessionId).toBe(sid);
+
+    client.close();
+
+    // Wait for the decision promise to settle so the test completes cleanly.
+    await decisionPromise;
   });
 });
