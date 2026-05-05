@@ -53,6 +53,7 @@ export class SessionRegistry extends EventEmitter {
     const rec: SessionRecord = {
       id: input.id,
       name: input.name,
+      claudeSessionId: null,
       agent: input.agent,
       cwd: input.cwd,
       pid: input.pid,
@@ -226,13 +227,10 @@ export class SessionRegistry extends EventEmitter {
       sessionFilePath,
       ...pub
     } = s;
-    // claudeSessionId placeholder — B2 will populate from a real
-    // currentClaudeSessionId field on SessionRecord.
-    const withChild = { ...pub, claudeSessionId: null };
     // sessionFilePath is meaningful only when set (CLI register passes a
     // placeholder before SessionStart fixes it up). Surface only when
     // non-empty so client UIs don't show "/x" placeholders.
-    return sessionFilePath ? { ...withChild, sessionFilePath } : withChild;
+    return sessionFilePath ? { ...pub, sessionFilePath } : pub;
   }
 
   override emit<K extends keyof RegistryEvents>(event: K, ...args: Parameters<RegistryEvents[K]>): boolean {

@@ -142,7 +142,7 @@ describe('SessionRegistry — publicView surfaces sessionFilePath', () => {
   });
   it('emitted session-added view also surfaces it', () => {
     const r = makeReg();
-    let captured: { sessionFilePath?: string } = {};
+    let captured: { sessionFilePath?: string | undefined; claudeSessionId: string | null } = { claudeSessionId: null };
     r.on('session-added', (s) => { captured = s; });
     r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/p.jsonl' });
     expect(captured.sessionFilePath).toBe('/p.jsonl');
