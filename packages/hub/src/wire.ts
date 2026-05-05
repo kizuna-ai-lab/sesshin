@@ -364,11 +364,6 @@ export function createApprovalAdapters(opts: {
           break;
       }
 
-      if (decision.kind === 'allow' && decision.sessionAllowAdd) {
-        const rec = registry.get(sessionId);
-        if (rec) rec.sessionAllowList.push(decision.sessionAllowAdd);
-      }
-
       if (decision.kind === 'allow' && decision.updatedInput) {
         pendingUpdatedInput.set(requestId, decision.updatedInput);
       }
