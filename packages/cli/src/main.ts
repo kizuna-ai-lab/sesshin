@@ -4,14 +4,13 @@ import { runClients } from './subcommands/clients.js';
 import { runHistory } from './subcommands/history.js';
 import { runCommandsInstall } from './subcommands/commands-install.js';
 import { runCommandsUninstall } from './subcommands/commands-uninstall.js';
-import { runTrust } from './subcommands/trust.js';
 import { runGate } from './subcommands/gate.js';
 import { runPin } from './subcommands/pin.js';
 import { runQuiet } from './subcommands/quiet.js';
 import { runLog } from './subcommands/log.js';
 import { requireLiveSession } from './require-live-session.js';
 
-const SESSION_REQUIRED = new Set(['status', 'clients', 'history', 'trust', 'gate', 'pin', 'quiet', 'log']);
+const SESSION_REQUIRED = new Set(['status', 'clients', 'history', 'gate', 'pin', 'quiet', 'log']);
 
 export interface MainDeps {
   argv: string[];
@@ -85,13 +84,6 @@ async function dispatch(deps: MainDeps, cmd: string | undefined, rest: string[])
       deps.stderr.write('usage: sesshin commands <install|uninstall>\n');
       return 2;
     }
-    case 'trust': {
-      const sid = pickFlag(rest, '--session') ?? deps.env.SESSHIN_SESSION_ID;
-      const positional = stripFlagPair(rest, '--session').filter((a) => !a.startsWith('--'));
-      const rule = positional[0];
-      if (!sid || !rule) { deps.stderr.write('usage: sesshin trust <ruleString> [--session <id>]\n'); return 2; }
-      return runTrust({ sessionId: sid, ruleString: rule });
-    }
     case 'gate': {
       const sid = pickFlag(rest, '--session') ?? deps.env.SESSHIN_SESSION_ID;
       const positional = stripFlagPair(rest, '--session').filter((a) => !a.startsWith('--'));
@@ -124,7 +116,7 @@ async function dispatch(deps: MainDeps, cmd: string | undefined, rest: string[])
       });
     }
     default:
-      deps.stderr.write(`usage: sesshin <claude|status|clients|history|commands|trust|gate|pin|quiet|log> ...\n`);
+      deps.stderr.write(`usage: sesshin <claude|status|clients|history|commands|gate|pin|quiet|log> ...\n`);
       return 2;
   }
 }

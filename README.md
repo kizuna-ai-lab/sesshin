@@ -180,9 +180,7 @@ answer.
 If no client is currently subscribed for that session, sesshin steps
 aside and lets claude's TUI prompt the laptop user as normal. So the
 mental model is: **open the web UI to take over, close it to give
-control back to the laptop.** The session also tracks claude's
-permission rules and any session-allow rules added via `/sesshin-trust`,
-short-circuiting the gate when an allow rule already covers the call.
+control back to the laptop.**
 
 Environment variables:
 
@@ -199,7 +197,6 @@ and per-session controls inside Claude Code:
 | `/sesshin-status`  | Current mode, gate, pending approvals, clients |
 | `/sesshin-clients` | List connected web/IM/device adapters |
 | `/sesshin-history` | Last N remotely resolved decisions |
-| `/sesshin-trust`   | Add a session-allow rule, e.g. `Bash(git log:*)` |
 | `/sesshin-gate`    | Override gate policy for this session |
 | `/sesshin-pin`     | Sticky note shown on remote clients |
 | `/sesshin-quiet`   | Suspend remote notifications for a duration |

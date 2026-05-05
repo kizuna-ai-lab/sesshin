@@ -174,7 +174,7 @@ behind it.
 A sesshin session id (`SessionInfo.id`) is bound to the sesshin process
 lifetime — stable across the user's `/clear`, `--resume`, and `/compact`. It
 owns parent-scoped state: WS client subscriptions, sticky pin, quiet-until
-window, gate override, claude allow rules, sessionAllowList.
+window, gate override, claude allow rules.
 
 A Claude session id (`SessionInfo.claudeSessionId`) is Claude Code's own
 conversation id. It changes on `SessionStart` with `source: startup | clear
