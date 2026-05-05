@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { catchAllHandler, setCatchAllToolName } from './catch-all.js';
 
-const ctx = { permissionMode: 'default' as const, cwd: '/x', sessionAllowList: [] };
+const ctx = { permissionMode: 'default' as const, cwd: '/x' };
 
 describe('catchAllHandler', () => {
   it('renders tool name + JSON-stringified input', () => {

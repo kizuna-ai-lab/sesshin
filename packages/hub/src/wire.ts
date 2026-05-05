@@ -137,7 +137,6 @@ export function createApprovalAdapters(opts: {
       const ctx: HandlerCtx = {
         permissionMode: knownMode ?? 'default',
         cwd: session?.cwd ?? process.cwd(),
-        sessionAllowList: session?.sessionAllowList ?? [],
       };
       const rendered = handler.render(toolInput, ctx);
 

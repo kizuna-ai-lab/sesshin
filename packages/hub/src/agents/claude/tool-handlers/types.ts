@@ -3,7 +3,6 @@ import type { PermissionMode, PermissionUpdate, PromptQuestion } from '@sesshin/
 export interface HandlerCtx {
   permissionMode: PermissionMode;
   cwd: string;
-  sessionAllowList: string[];
 }
 
 export interface PromptAnswer {

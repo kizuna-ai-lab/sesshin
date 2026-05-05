@@ -153,20 +153,6 @@ describe('POST /permission/:sessionId — happy paths', () => {
     expect(env.agent).toBe('claude-code');
     expect(env.raw['session_id']).toBe('claude-uuid');
   });
-  it('calls registry.markUsesPermissionRequest before dispatch (sticky opt-in)', async () => {
-    svr = createRestServer({
-      registry, approvals,
-      onPermissionRequestApproval: async () => null,
-    });
-    await svr.listen(0, '127.0.0.1');
-    port = svr.address().port;
-    expect(registry.get('s1')!.usesPermissionRequest).toBe(false);
-    await fetch(`http://127.0.0.1:${port}/permission/s1`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(PERM_BODY()),
-    });
-    expect(registry.get('s1')!.usesPermissionRequest).toBe(true);
-  });
 });
 
 describe('POST /permission/:sessionId — failure modes', () => {

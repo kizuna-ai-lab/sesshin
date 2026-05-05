@@ -57,25 +57,6 @@ describe('SessionRegistry', () => {
     expect(r.setPermissionMode('missing', 'plan')).toBe(false);
   });
 
-  it('addSessionAllow appends rules; idempotent on dup', () => {
-    const r = makeReg();
-    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    expect(r.addSessionAllow('s1', 'Bash(git log:*)')).toBe(true);
-    expect(r.addSessionAllow('s1', 'Bash(git log:*)')).toBe(false);
-    expect(r.get('s1')?.sessionAllowList).toEqual(['Bash(git log:*)']);
-    expect(r.addSessionAllow('missing', 'Bash(ls:*)')).toBe(false);
-  });
-
-  it('removeSessionAllow drops a rule; returns false if absent or session missing', () => {
-    const r = makeReg();
-    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    r.addSessionAllow('s1', 'Bash(git log:*)');
-    expect(r.removeSessionAllow('s1', 'Bash(git log:*)')).toBe(true);
-    expect(r.get('s1')?.sessionAllowList).toEqual([]);
-    expect(r.removeSessionAllow('s1', 'Bash(git log:*)')).toBe(false);
-    expect(r.removeSessionAllow('missing', 'x')).toBe(false);
-  });
-
   it('setSessionGateOverride is read via getSessionGateOverride', () => {
     const r = makeReg();
     r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
@@ -105,30 +86,6 @@ describe('SessionRegistry', () => {
   });
 });
 
-describe('SessionRegistry — usesPermissionRequest', () => {
-  it('newly-registered session has usesPermissionRequest=false', () => {
-    const r = makeReg();
-    r.register({ id: 's', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    expect(r.get('s')!.usesPermissionRequest).toBe(false);
-  });
-  it('markUsesPermissionRequest sets the flag and returns true on first call', () => {
-    const r = makeReg();
-    r.register({ id: 's', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    expect(r.markUsesPermissionRequest('s')).toBe(true);
-    expect(r.get('s')!.usesPermissionRequest).toBe(true);
-  });
-  it('markUsesPermissionRequest returns false when already set (idempotent)', () => {
-    const r = makeReg();
-    r.register({ id: 's', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    r.markUsesPermissionRequest('s');
-    expect(r.markUsesPermissionRequest('s')).toBe(false);
-  });
-  it('markUsesPermissionRequest returns false when session not registered', () => {
-    const r = makeReg();
-    expect(r.markUsesPermissionRequest('missing')).toBe(false);
-  });
-});
-
 describe('SessionRegistry — publicView surfaces sessionFilePath', () => {
   it('list() includes sessionFilePath when non-empty', () => {
     const r = makeReg();
@@ -147,13 +104,11 @@ describe('SessionRegistry — publicView surfaces sessionFilePath', () => {
     r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/p.jsonl' });
     expect(captured.sessionFilePath).toBe('/p.jsonl');
   });
-  it('publicView does NOT leak claudeAllowRules / sessionAllowList / usesPermissionRequest / etc.', () => {
+  it('publicView does NOT leak claudeAllowRules / etc.', () => {
     const r = makeReg();
     r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/p.jsonl' });
     const view = r.list()[0] as Record<string, unknown>;
     expect('claudeAllowRules' in view).toBe(false);
-    expect('sessionAllowList' in view).toBe(false);
-    expect('usesPermissionRequest' in view).toBe(false);
     expect('lastHeartbeat' in view).toBe(false);
     expect('fileTailCursor' in view).toBe(false);
     // pin, quietUntil, sessionGateOverride are now surfaced in publicView:
@@ -241,8 +196,6 @@ describe('publicView and config-changed event', () => {
     r.setPin(id, 'x');
     expect(captured).not.toBeNull();
     expect('claudeAllowRules' in captured).toBe(false);
-    expect('sessionAllowList' in captured).toBe(false);
-    expect('usesPermissionRequest' in captured).toBe(false);
   });
 
   it('setPin on unknown session returns false and does not emit', () => {

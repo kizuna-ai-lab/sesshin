@@ -48,10 +48,6 @@ export async function handlePermissionRoute(
   const parsed = PermissionRequestBody.safeParse(raw);
   if (!parsed.success) { res.writeHead(400).end(); return; }
 
-  // Sticky opt-in flag — fires before dispatch so the next PreToolUse on
-  // this session short-circuits even if dispatch throws.
-  deps.registry.markUsesPermissionRequest(sessionId);
-
   // Build normalized envelope; emit onto the bus.
   const envelope = {
     agent: 'claude-code' as const,

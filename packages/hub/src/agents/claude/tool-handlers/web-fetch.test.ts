@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { webFetchHandler } from './web-fetch.js';
 
-const ctx = { permissionMode: 'default' as const, cwd: '/x', sessionAllowList: [] };
+const ctx = { permissionMode: 'default' as const, cwd: '/x' };
 
 describe('webFetchHandler', () => {
   it('renders URL + host-scoped option', () => {

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { askUserQuestionHandler } from './ask-user-question.js';
 
-const ctx = { permissionMode: 'default' as const, cwd: '/x', sessionAllowList: [] };
+const ctx = { permissionMode: 'default' as const, cwd: '/x' };
 
 describe('askUserQuestionHandler', () => {
   const input = {
@@ -80,7 +80,7 @@ describe('askUserQuestionHandler — PermissionRequest shape', () => {
   // pendingUpdatedInput[requestId] to populate decision.updatedInput on the
   // wire response. Here we verify the handler always produces kind:allow
   // and never kind:deny — its only outcome is "allow with updated input".
-  const c = { permissionMode: 'default' as const, cwd: '/', sessionAllowList: [] };
+  const c = { permissionMode: 'default' as const, cwd: '/' };
   it('produces kind:allow with updatedInput.answers; adapter maps to behavior:allow + updatedInput', () => {
     const input = {
       questions: [{

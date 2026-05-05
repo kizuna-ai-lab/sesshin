@@ -216,24 +216,6 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     const list = deps.historyForSession?.(id, n) ?? [];
     return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(list));
   }
-  const tm = url.pathname.match(/^\/api\/sessions\/([^/]+)\/trust$/);
-  if (tm) {
-    const id = tm[1]!;
-    if (method !== 'POST') return void res.writeHead(405).end();
-    let body: unknown;
-    try { body = await readJson(req); } catch { return void res.writeHead(400).end(); }
-    const obj = (body && typeof body === 'object' ? body as Record<string, unknown> : {});
-    const rule = typeof obj['ruleString'] === 'string' ? obj['ruleString'] : null;
-    if (!rule) return void res.writeHead(400).end('ruleString required');
-    if (!deps.registry.get(id)) return void res.writeHead(404).end();
-    // Idempotent: addSessionAllow returns false on duplicate, but a duplicate
-    // trust request is not an error from the REST caller's perspective. We
-    // already verified the session exists with the .get() check above; a
-    // dropped boolean here means "the rule is now in the list", which is
-    // what the caller wanted regardless of whether they were the first to add it.
-    deps.registry.addSessionAllow(id, rule);
-    return void res.writeHead(204).end();
-  }
   const gm = url.pathname.match(/^\/api\/sessions\/([^/]+)\/gate$/);
   if (gm) {
     const id = gm[1]!;

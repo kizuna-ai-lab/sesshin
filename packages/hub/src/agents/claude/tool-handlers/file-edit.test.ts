@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { fileEditHandler } from './file-edit.js';
 
-const ctx = { permissionMode: 'default' as const, cwd: '/proj', sessionAllowList: [] };
+const ctx = { permissionMode: 'default' as const, cwd: '/proj' };
 
 describe('fileEditHandler', () => {
   it('renders body with file_path + 3 options', () => {

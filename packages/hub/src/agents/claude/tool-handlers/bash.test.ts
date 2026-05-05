@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { bashHandler } from './bash.js';
 
-const ctx = { permissionMode: 'default' as const, cwd: '/x', sessionAllowList: [] };
+const ctx = { permissionMode: 'default' as const, cwd: '/x' };
 
 describe('bashHandler', () => {
   it('renders the command in a fenced bash block + 3 options', () => {
