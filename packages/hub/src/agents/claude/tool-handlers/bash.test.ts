@@ -34,7 +34,7 @@ describe('bashHandler', () => {
     expect(d).toMatchObject({
       kind: 'allow',
       updatedPermissions: [
-        { type: 'addRules', behavior: 'allow', destination: 'session', rules: ['Bash(npm run:*)'] },
+        { type: 'addRules', behavior: 'allow', destination: 'session', rules: [{ toolName: 'Bash', ruleContent: 'npm run:*' }] },
       ],
     });
   });
@@ -47,7 +47,7 @@ describe('bashHandler', () => {
     expect(d).toMatchObject({
       kind: 'allow',
       updatedPermissions: [
-        { type: 'addRules', behavior: 'allow', destination: 'session', rules: ['Bash(git log:*)'] },
+        { type: 'addRules', behavior: 'allow', destination: 'session', rules: [{ toolName: 'Bash', ruleContent: 'git log:*' }] },
       ],
     });
   });

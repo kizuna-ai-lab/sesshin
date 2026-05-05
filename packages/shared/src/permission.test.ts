@@ -29,12 +29,12 @@ describe('PermissionUpdate schema (addRules variant)', () => {
     const r = PermissionUpdate.safeParse({
       type: 'addRules',
       destination: 'session',
-      rules: ['Bash(npm run:*)'],
+      rules: [{ toolName: 'Bash', ruleContent: 'npm run:*' }],
       behavior: 'allow',
     });
     expect(r.success).toBe(true);
     if (r.success && r.data.type === 'addRules') {
-      expect(r.data.rules).toEqual(['Bash(npm run:*)']);
+      expect(r.data.rules).toEqual([{ toolName: 'Bash', ruleContent: 'npm run:*' }]);
       expect(r.data.behavior).toBe('allow');
       expect(r.data.destination).toBe('session');
     }
@@ -42,7 +42,7 @@ describe('PermissionUpdate schema (addRules variant)', () => {
   it('accepts each external permission behavior', () => {
     for (const behavior of ['allow', 'deny', 'ask']) {
       const r = PermissionUpdate.safeParse({
-        type: 'addRules', destination: 'session', rules: ['Bash(ls:*)'], behavior,
+        type: 'addRules', destination: 'session', rules: [{ toolName: 'Bash', ruleContent: 'ls:*' }], behavior,
       });
       expect(r.success, `behavior=${behavior}`).toBe(true);
     }
@@ -55,17 +55,17 @@ describe('PermissionUpdate schema (addRules variant)', () => {
   });
   it('rejects addRules missing behavior', () => {
     const r = PermissionUpdate.safeParse({
-      type: 'addRules', destination: 'session', rules: ['Bash(npm run:*)'],
+      type: 'addRules', destination: 'session', rules: [{ toolName: 'Bash', ruleContent: 'npm run:*' }],
     });
     expect(r.success).toBe(false);
   });
   it('rejects addRules with unrecognized behavior', () => {
     const r = PermissionUpdate.safeParse({
-      type: 'addRules', destination: 'session', rules: ['Bash(npm run:*)'], behavior: 'maybe',
+      type: 'addRules', destination: 'session', rules: [{ toolName: 'Bash', ruleContent: 'npm run:*' }], behavior: 'maybe',
     });
     expect(r.success).toBe(false);
   });
-  it('rejects addRules with non-string rule entries', () => {
+  it('rejects addRules with non-object rule entries', () => {
     const r = PermissionUpdate.safeParse({
       type: 'addRules', destination: 'session', rules: [{}], behavior: 'allow',
     });
@@ -73,16 +73,43 @@ describe('PermissionUpdate schema (addRules variant)', () => {
   });
   it('rejects addRules with unknown destination', () => {
     const r = PermissionUpdate.safeParse({
-      type: 'addRules', destination: 'wat', rules: ['Bash(ls:*)'], behavior: 'allow',
+      type: 'addRules', destination: 'wat', rules: [{ toolName: 'Bash', ruleContent: 'ls:*' }], behavior: 'allow',
     });
     expect(r.success).toBe(false);
+  });
+  it('rejects legacy string-form rules (regression pin)', () => {
+    const r = PermissionUpdate.safeParse({
+      type: 'addRules',
+      destination: 'session',
+      behavior: 'allow',
+      rules: ['Bash(npm run:*)'],  // wrong; was emitted before C1's bug-fix
+    });
+    expect(r.success).toBe(false);
+  });
+  it('rejects rules entries missing toolName', () => {
+    const r = PermissionUpdate.safeParse({
+      type: 'addRules',
+      destination: 'session',
+      behavior: 'allow',
+      rules: [{ ruleContent: 'npm run:*' }],
+    });
+    expect(r.success).toBe(false);
+  });
+  it('accepts rules entries with toolName only (ruleContent optional)', () => {
+    const r = PermissionUpdate.safeParse({
+      type: 'addRules',
+      destination: 'session',
+      behavior: 'allow',
+      rules: [{ toolName: 'Bash' }],
+    });
+    expect(r.success).toBe(true);
   });
 });
 
 describe('PermissionUpdate schema (discriminator)', () => {
   it('rejects an unknown type value', () => {
     const r = PermissionUpdate.safeParse({
-      type: 'replaceRules', destination: 'session', rules: ['Bash(ls:*)'], behavior: 'allow',
+      type: 'replaceRules', destination: 'session', rules: [{ toolName: 'Bash', ruleContent: 'ls:*' }], behavior: 'allow',
     });
     expect(r.success).toBe(false);
   });

@@ -41,7 +41,7 @@ export const catchAllHandler: ToolHandler = {
             type: 'addRules',
             behavior: 'allow',
             destination: 'session',
-            rules: [`${tool}(${JSON.stringify(input)})`],
+            rules: [{ toolName: tool, ruleContent: JSON.stringify(input) }],
           },
         ],
       };

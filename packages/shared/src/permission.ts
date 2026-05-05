@@ -1,6 +1,18 @@
 import { z } from 'zod';
 
 /**
+ * Mirror of Claude Code's PermissionRuleValueSchema (CC source:
+ * src/utils/permissions/PermissionRule.ts). The rule's *transport*
+ * encoding for the PermissionRequest hook response — distinct from
+ * the string form (e.g. "Bash(npm run:*)") that CC writes to
+ * settings.json via permissionRuleValueToString().
+ */
+const PermissionRuleValue = z.object({
+  toolName: z.string(),
+  ruleContent: z.string().optional(),
+});
+
+/**
  * Subset of Claude Code's PermissionUpdate union, covering the variants
  * sesshin currently emits from `allow` decisions:
  *  - `setMode`  — pin the post-approval permission mode (e.g. on ExitPlanMode
@@ -13,6 +25,13 @@ import { z } from 'zod';
  * in the CC source). Other variants (replaceRules, removeRules, addDirectories,
  * removeDirectories) are intentionally not implemented until a sesshin handler
  * needs them.
+ *
+ * Note: `addRules.rules` uses the structured `{ toolName, ruleContent? }` form
+ * per CC's authoritative schema (PermissionRule.ts), NOT the stringified
+ * `"Bash(npm run:*)"` form that CC's permissionRuleValueToString() produces
+ * for serialization to settings.json. CC's parseHttpHookOutput strictly
+ * validates the transport encoding — emitting strings here is silently
+ * rejected at runtime.
  */
 export const PermissionUpdate = z.discriminatedUnion('type', [
   z.object({
@@ -23,7 +42,7 @@ export const PermissionUpdate = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('addRules'),
     destination: z.enum(['session', 'userSettings', 'projectSettings', 'localSettings', 'cliArg']),
-    rules: z.array(z.string()),
+    rules: z.array(PermissionRuleValue),
     behavior: z.enum(['allow', 'deny', 'ask']),
   }),
 ]);

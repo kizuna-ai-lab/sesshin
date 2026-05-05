@@ -42,7 +42,7 @@ export const bashHandler: ToolHandler = {
       return {
         kind: 'allow',
         updatedPermissions: [
-          { type: 'addRules', behavior: 'allow', destination: 'session', rules: [`Bash(${prefix})`] },
+          { type: 'addRules', behavior: 'allow', destination: 'session', rules: [{ toolName: 'Bash', ruleContent: prefix }] },
         ],
       };
     }

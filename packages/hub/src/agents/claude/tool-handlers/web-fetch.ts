@@ -34,7 +34,7 @@ export const webFetchHandler: ToolHandler = {
               type: 'addRules',
               behavior: 'allow',
               destination: 'session',
-              rules: [`WebFetch(${u.protocol}//${u.host}/*)`],
+              rules: [{ toolName: 'WebFetch', ruleContent: `${u.protocol}//${u.host}/*` }],
             },
           ],
         };

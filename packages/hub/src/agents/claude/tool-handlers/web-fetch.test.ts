@@ -18,7 +18,7 @@ describe('webFetchHandler', () => {
     expect(d).toMatchObject({
       kind: 'allow',
       updatedPermissions: [
-        { type: 'addRules', behavior: 'allow', destination: 'session', rules: ['WebFetch(https://example.com/*)'] },
+        { type: 'addRules', behavior: 'allow', destination: 'session', rules: [{ toolName: 'WebFetch', ruleContent: 'https://example.com/*' }] },
       ],
     });
   });

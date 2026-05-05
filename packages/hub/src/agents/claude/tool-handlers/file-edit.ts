@@ -36,7 +36,7 @@ export const fileEditHandler: ToolHandler = {
       return {
         kind: 'allow',
         updatedPermissions: [
-          { type: 'addRules', behavior: 'allow', destination: 'session', rules: [`Edit(${dir}/*)`] },
+          { type: 'addRules', behavior: 'allow', destination: 'session', rules: [{ toolName: 'Edit', ruleContent: `${dir}/*` }] },
         ],
       };
     }

@@ -29,7 +29,7 @@ describe('catchAllHandler', () => {
           type: 'addRules',
           behavior: 'allow',
           destination: 'session',
-          rules: ['mcp__custom__doStuff({"k":"v"})'],
+          rules: [{ toolName: 'mcp__custom__doStuff', ruleContent: '{"k":"v"}' }],
         },
       ]);
     }
@@ -55,7 +55,7 @@ describe('catchAllHandler', () => {
           type: 'addRules',
           behavior: 'allow',
           destination: 'session',
-          rules: ['mcp__server-A__do({"q":1})'],
+          rules: [{ toolName: 'mcp__server-A__do', ruleContent: '{"q":1}' }],
         },
       ]);
     }

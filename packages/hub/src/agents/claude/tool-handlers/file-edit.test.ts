@@ -20,7 +20,7 @@ describe('fileEditHandler', () => {
     expect(d).toMatchObject({
       kind: 'allow',
       updatedPermissions: [
-        { type: 'addRules', behavior: 'allow', destination: 'session', rules: ['Edit(/proj/src/*)'] },
+        { type: 'addRules', behavior: 'allow', destination: 'session', rules: [{ toolName: 'Edit', ruleContent: '/proj/src/*' }] },
       ],
     });
   });
