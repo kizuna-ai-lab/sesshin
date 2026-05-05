@@ -9,7 +9,6 @@ import { EventBus } from './event-bus.js';
 import { PtyTap } from './observers/pty-tap.js';
 import { parsePolicy } from './agents/claude/approval-policy.js';
 import { randomUUID } from 'node:crypto';
-import { catchAllHandler } from './agents/claude/tool-handlers/catch-all.js';
 
 // Tests in this file exercise wire.ts's broadcast wiring via the
 // createApprovalAdapters factory. The WS server filters
