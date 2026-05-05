@@ -35,7 +35,7 @@ describe('session schemas', () => {
 });
 describe('SessionInfoSchema sticky config fields', () => {
   const base = {
-    id: 's', name: 'n', agent: 'claude-code' as const,
+    id: 's', name: 'n', claudeSessionId: null, agent: 'claude-code' as const,
     cwd: '/x', pid: 1, startedAt: 0,
     state: 'idle' as const,
     substate: {
