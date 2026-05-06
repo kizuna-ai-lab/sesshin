@@ -14,6 +14,7 @@ import { wirePtyIdleWatcher, type IdleWatcherConfig } from './observers/pty-idle
 import { wireStateMachine } from './state-machine/applier.js';
 import { Dedup } from './observers/dedup.js';
 import { PtyTap } from './observers/pty-tap.js';
+import { HeadlessTerm } from './observers/headless-term.js';
 import { tailSessionFile } from './observers/session-file-tail.js';
 import { createRestServer, type RestServer, type RestServerDeps } from './rest/server.js';
 import { createWsServer, type WsServerInstance, type WsServerDeps } from './ws/server.js';
@@ -596,6 +597,11 @@ export async function startHub(): Promise<HubInstance> {
     onDetachSink:    (id) => { bridge.clearSink(id); },
     approvals,
     hasSubscribedActionsClient: (sid) => wsRef?.hasSubscribedActionsClient(sid) ?? false,
+    onWinsize: (sessionId, cols, rows) => {
+      registry.setSessionWinsize(sessionId, cols, rows);
+      terminals.get(sessionId)?.resize(cols, rows);
+      wsRef?.broadcast({ type: 'terminal.resize', sessionId, cols, rows });
+    },
     listClients: (sid) => wsRef?.listClients(sid) ?? [],
     ...adapters.restDeps,
   });
@@ -606,11 +612,44 @@ export async function startHub(): Promise<HubInstance> {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname  = dirname(__filename);
   const staticDir  = join(__dirname, 'web');
+  const terminalTaps = new Map<string, () => void>();
+  const terminals = new Map<string, HeadlessTerm>();
+  const ensureTerminal = (sessionId: string): HeadlessTerm => {
+    let terminal = terminals.get(sessionId);
+    if (!terminal) {
+      const info = registry.get(sessionId);
+      terminal = new HeadlessTerm(info?.cols ?? 80, info?.rows ?? 24);
+      terminals.set(sessionId, terminal);
+      terminalTaps.set(sessionId, tap.subscribe(sessionId, (chunk, seq) => terminal!.write(chunk, seq)));
+    }
+    return terminal;
+  };
   const ws = createWsServer({
     registry, bus: dedupedBus, tap, staticDir, approvals,
     onInput: async (sessionId, data, source) => {
       const r = await bridge.deliver(sessionId, data, source);
       return { ok: r.ok, ...(r.reason !== undefined ? { reason: r.reason } : {}) };
+    },
+    onTerminalSubscribe: (sessionId, send) => {
+      if (!registry.get(sessionId)) return null;
+      const terminal = ensureTerminal(sessionId);
+      const snap = terminal.snapshot();
+      send({
+        type: 'terminal.snapshot',
+        sessionId,
+        seq: snap.seq,
+        cols: snap.cols,
+        rows: snap.rows,
+        data: snap.data,
+      });
+      return tap.subscribe(sessionId, (chunk, seq) => {
+        send({
+          type: 'terminal.delta',
+          sessionId,
+          seq,
+          data: chunk.toString('base64'),
+        });
+      });
     },
     ...adapters.wsDeps,
   });
@@ -620,27 +659,31 @@ export async function startHub(): Promise<HubInstance> {
 
   registry.on('session-removed', adapters.onSessionRemoved);
 
-  // Broadcast PTY raw output to WS clients with the `raw` capability.
-  const rawSubscriptions = new Map<string, () => void>();
-  const subscribeRaw = (sessionId: string): void => {
-    if (rawSubscriptions.has(sessionId)) return;
-    const off = tap.subscribe(sessionId, (chunk, seq) => {
-      ws.broadcast({
-        type: 'session.raw',
-        sessionId,
-        seq,
-        data: chunk.toString('utf-8'),
-      });
-    });
-    rawSubscriptions.set(sessionId, off);
-  };
-  const unsubscribeRaw = (sessionId: string): void => {
-    const off = rawSubscriptions.get(sessionId);
-    if (off) { off(); rawSubscriptions.delete(sessionId); }
-  };
-  registry.on('session-added', (info) => subscribeRaw(info.id));
-  registry.on('session-removed', (id) => unsubscribeRaw(id));
-  for (const s of registry.list()) subscribeRaw(s.id);
+  registry.on('session-added', (info) => ensureTerminal(info.id));
+  registry.on('session-removed', (id) => {
+    const off = terminalTaps.get(id);
+    if (off) off();
+    terminalTaps.delete(id);
+    terminals.get(id)?.dispose();
+    terminals.delete(id);
+    ws.broadcast({ type: 'terminal.ended', sessionId: id, reason: 'session-removed' });
+  });
+  for (const s of registry.list()) ensureTerminal(s.id);
+  registry.on('state-changed', (s) => {
+    if (s.state === 'done' || s.state === 'interrupted' || s.state === 'error') {
+      ws.broadcast({ type: 'terminal.ended', sessionId: s.id, reason: s.state });
+    }
+  });
+  registry.on('config-changed', (s) => {
+    if (s.cols && s.rows) {
+      terminals.get(s.id)?.resize(s.cols, s.rows);
+    }
+  });
+  registry.on('session-added', (s) => {
+    if (s.cols && s.rows) {
+      terminals.get(s.id)?.resize(s.cols, s.rows);
+    }
+  });
 
   // Summarizer trigger (T46): Stop → Mode B' → broadcast session.summary
   const useHeuristic = process.env['SESSHIN_SUMMARIZER'] === 'heuristic';
@@ -667,7 +710,10 @@ export async function startHub(): Promise<HubInstance> {
     shutdown: async () => {
       clearInterval(staleSweep);
       ptyIdleWatcher.stop();
-      for (const off of rawSubscriptions.values()) off();
+      for (const off of terminalTaps.values()) off();
+      terminalTaps.clear();
+      for (const t of terminals.values()) t.dispose();
+      terminals.clear();
       for (const s of stopTails.values()) s();
       checkpoint.stop();
       await ws.close();

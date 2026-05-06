@@ -62,6 +62,8 @@ export const SessionInfoSchema = z.object({
    * UIs can offer "open log" / "copy log path" affordances.
    */
   sessionFilePath: z.string().optional(),
+  cols:             z.number().int().positive().optional(),
+  rows:             z.number().int().positive().optional(),
   // Sticky user-set session config. All three are nullable+optional:
   // - missing: schema-level backwards compatibility for old payloads
   // - null:    explicitly unset (default after register())

@@ -64,6 +64,8 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
     body: JSON.stringify({
       id: sessionId, name: `claude (${cwd})`, agent: 'claude-code', cwd,
       pid: process.pid, sessionFilePath: sfp,
+      cols: process.stdout.columns ?? 80,
+      rows: process.stdout.rows ?? 24,
       initialPermissionMode,
       claudeAllowRules: claudeSettings.allowRules,
     }),
@@ -100,6 +102,20 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
     onInput: (data, _src) => wrap.write(data),
   });
 
+  const onResize = (): void => {
+    const cols = process.stdout.columns ?? 80;
+    const rows = process.stdout.rows ?? 24;
+    wrap.resize(cols, rows);
+    void fetch(`${HUB_URL}/api/sessions/${sessionId}/winsize`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ cols, rows }),
+    }).catch(() => {});
+  };
+  process.stdout.on('resize', onResize);
+  onResize();
+
+
   // Shutdown is triggered by:
   //   (a) signal (SIGINT/SIGTERM) — via installCleanup's signal handlers
   //   (b) claude exiting naturally (`exit` / Ctrl+D) — via wrap.onExit
@@ -111,6 +127,7 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
     if (didShutdown) return;
     didShutdown = true;
     stopHeartbeat();
+    process.stdout.off('resize', onResize);
     tap.close();
     inject.close();
     try { await fetch(`${HUB_URL}/api/sessions/${sessionId}`, { method: 'DELETE' }); } catch {}
