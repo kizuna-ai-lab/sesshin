@@ -185,7 +185,10 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
   // exits too — closing the PTY, firing wrap.onExit, tearing down sesshin.
   //
   // POSIX-ish `;` separator works for bash/zsh/fish/dash/sh/ksh.
-  wrap.write(`set -m; ${claudeCmd}; exit\n`);
+  // The `printf '\x1b[2J\x1b[H'` clears the screen + homes the cursor right
+  // before claude runs, hiding the brief PS1 + echoed-command flash that
+  // would otherwise be visible while the inner shell processes our line.
+  wrap.write(`set -m; printf '\\x1b[2J\\x1b[H'; ${claudeCmd}; exit\n`);
 
   // ── Shutdown ─────────────────────────────────────────────────────────────
   // Triggered by:
