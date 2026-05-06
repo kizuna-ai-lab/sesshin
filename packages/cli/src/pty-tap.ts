@@ -27,7 +27,9 @@ export interface PtyTapOptions {
  */
 export function startPtyTap(opts: PtyTapOptions): PtyTapHandle {
   const url = new URL(opts.hubUrl);
-  const port = Number(url.port);
+  // url.port is '' when the URL omits an explicit port; Number('') is 0,
+  // which is invalid. Default by protocol so http://host/path also works.
+  const port = url.port ? Number(url.port) : (url.protocol === 'https:' ? 443 : 80);
   const queueMax = opts.queueMax ?? 1024;
   const initialBackoffMs = opts.initialBackoffMs ?? 100;
   const maxBackoffMs = opts.maxBackoffMs ?? 5000;
@@ -107,12 +109,13 @@ export function startPtyTap(opts: PtyTapOptions): PtyTapHandle {
     writeChunk(data: string): void {
       if (closed) return;
       const buf = Buffer.from(data, 'utf-8');
-      if (req && connected && req.writable && !isDestroyed(req)) {
-        req.write(buf);
-        return;
-      }
+      // Always enqueue first, then flush. Routing through the queue keeps the
+      // bound (queueMax) honored and ensures backpressure observed during
+      // flushQueue (req.write returning false → drain wait) doesn't get
+      // bypassed by a fast-path write.
       queue.push(buf);
       while (queue.length > queueMax) queue.shift();
+      if (req && connected && req.writable && !isDestroyed(req)) flushQueue();
     },
     close(): void {
       closed = true;

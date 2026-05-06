@@ -181,6 +181,7 @@ export class SessionRegistry extends EventEmitter {
   setSessionWinsize(id: string, cols: number, rows: number): boolean {
     const s = this.sessions.get(id);
     if (!s) return false;
+    if (!Number.isInteger(cols) || !Number.isInteger(rows)) return false;
     if (cols <= 0 || rows <= 0) return false;
     if (s.cols === cols && s.rows === rows) return true;
     s.cols = cols;

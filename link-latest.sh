@@ -22,8 +22,10 @@ pnpm install
 printf '==> building workspace packages\n'
 pnpm build
 
-printf '==> linking root CLI package globally (sesshin)\n'
+printf '==> linking CLI package globally (sesshin)\n'
+cd "$ROOT_DIR/packages/cli"
 pnpm link --global
+cd "$ROOT_DIR"
 
 printf '==> linking hub package globally (sesshin-hub)\n'
 cd "$ROOT_DIR/packages/hub"

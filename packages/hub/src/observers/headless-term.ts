@@ -1,18 +1,31 @@
 import XtermHeadless from '@xterm/headless';
 import SerializeAddonPkg from '@xterm/addon-serialize';
 
-const { Terminal } = XtermHeadless as unknown as { Terminal: typeof import('@xterm/headless')['Terminal'] };
-const { SerializeAddon } = SerializeAddonPkg as unknown as { SerializeAddon: typeof import('@xterm/addon-serialize')['SerializeAddon'] };
+type XtermTerminal = InstanceType<typeof import('@xterm/headless').Terminal>;
+type XtermSerializeAddon = InstanceType<typeof import('@xterm/addon-serialize').SerializeAddon>;
+
+const { Terminal } = XtermHeadless as unknown as {
+  Terminal: typeof import('@xterm/headless').Terminal;
+};
+const { SerializeAddon } = SerializeAddonPkg as unknown as {
+  SerializeAddon: typeof import('@xterm/addon-serialize').SerializeAddon;
+};
 
 export interface HeadlessSnapshot {
   cols: number;
   rows: number;
   data: string;
+  // seq corresponds to the last PtyTap chunk applied to this terminal. Captured
+  // alongside the serialize() result so callers don't poll currentSeq() and
+  // race against bytes that landed between snapshot serialization and the seq
+  // read.
+  seq: number;
 }
 
 export class HeadlessTerm {
-  private readonly term: Terminal;
-  private readonly serializeAddon: SerializeAddon;
+  private readonly term: XtermTerminal;
+  private readonly serializeAddon: XtermSerializeAddon;
+  private lastSeq = 0;
 
   constructor(cols: number, rows: number) {
     this.term = new Terminal({
@@ -26,8 +39,9 @@ export class HeadlessTerm {
     this.term.loadAddon(this.serializeAddon);
   }
 
-  write(chunk: Buffer): void {
+  write(chunk: Buffer, seq: number): void {
     this.term.write(chunk);
+    this.lastSeq = seq;
   }
 
   resize(cols: number, rows: number): void {
@@ -41,6 +55,7 @@ export class HeadlessTerm {
       cols: this.term.cols,
       rows: this.term.rows,
       data: this.serializeAddon.serialize(),
+      seq: this.lastSeq,
     };
   }
 

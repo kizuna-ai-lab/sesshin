@@ -94,7 +94,7 @@ export function handleConnection(
       ws.send(JSON.stringify({
         type: 'server.hello', protocol: PROTOCOL_VERSION,
         machine: hostname(),
-        supported: ['summary','events','raw','actions','voice','history','state','attention'],
+        supported: ['summary','events','terminal','actions','voice','history','state','attention'],
       }));
       attachSubscribed(state, deps);
       return;

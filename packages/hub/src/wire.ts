@@ -620,7 +620,7 @@ export async function startHub(): Promise<HubInstance> {
       const info = registry.get(sessionId);
       terminal = new HeadlessTerm(info?.cols ?? 80, info?.rows ?? 24);
       terminals.set(sessionId, terminal);
-      terminalTaps.set(sessionId, tap.subscribe(sessionId, (chunk) => terminal!.write(chunk)));
+      terminalTaps.set(sessionId, tap.subscribe(sessionId, (chunk, seq) => terminal!.write(chunk, seq)));
     }
     return terminal;
   };
@@ -637,7 +637,7 @@ export async function startHub(): Promise<HubInstance> {
       send({
         type: 'terminal.snapshot',
         sessionId,
-        seq: tap.currentSeq(sessionId),
+        seq: snap.seq,
         cols: snap.cols,
         rows: snap.rows,
         data: snap.data,
@@ -710,7 +710,10 @@ export async function startHub(): Promise<HubInstance> {
     shutdown: async () => {
       clearInterval(staleSweep);
       ptyIdleWatcher.stop();
-      for (const off of rawSubscriptions.values()) off();
+      for (const off of terminalTaps.values()) off();
+      terminalTaps.clear();
+      for (const t of terminals.values()) t.dispose();
+      terminals.clear();
       for (const s of stopTails.values()) s();
       checkpoint.stop();
       await ws.close();

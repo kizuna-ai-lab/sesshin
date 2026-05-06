@@ -53,7 +53,12 @@ const terminalListeners = new Map<string, Set<(message: TerminalMessage) => void
 let currentSocket: WebSocket | null = null;
 
 function sendFrame(payload: object): void {
-  currentSocket?.send(JSON.stringify(payload));
+  // Only send when OPEN. While CONNECTING, ws.send throws InvalidStateError.
+  // Subscriptions issued before the socket opens are replayed via
+  // rehydrateTerminalSubscriptions() in the 'open' handler.
+  if (currentSocket && currentSocket.readyState === WebSocket.OPEN) {
+    currentSocket.send(JSON.stringify(payload));
+  }
 }
 
 function emitTerminal(message: TerminalMessage): void {
@@ -153,7 +158,12 @@ export function connect(): WsClient {
         terminalListeners.set(sessionId, listeners);
       }
       listeners.add(onMessage);
-      sendFrame({ type: 'terminal.subscribe', sessionId });
+      // Only ask the hub for a fresh snapshot the first time we register
+      // interest in this session. Subsequent listeners ride the existing
+      // subscription so we don't reset the live terminal view of the first.
+      if (listeners.size === 1) {
+        sendFrame({ type: 'terminal.subscribe', sessionId });
+      }
       return () => {
         const cur = terminalListeners.get(sessionId);
         if (!cur) return;
