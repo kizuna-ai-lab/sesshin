@@ -38,6 +38,10 @@ export class PtyTap {
     return r.buf.slice(0, r.used);
   }
 
+  currentSeq(sessionId: string): number {
+    return this.rings.get(sessionId)?.seq ?? 0;
+  }
+
   subscribe(sessionId: string, sub: Subscriber): () => void {
     const r = this.ring(sessionId);
     r.subs.add(sub);

@@ -41,6 +41,8 @@ export interface RestServerDeps {
   listClients?: (sessionId: string | null) => ClientInfo[];
   /** Read recent prompt-resolution history for a session, newest-first. */
   historyForSession?: (sessionId: string, n: number) => HistoryEntry[];
+  /** Update the PTY size reported by the CLI for a session. */
+  onWinsize?: (sessionId: string, cols: number, rows: number) => void;
   /**
    * Called from the stale-cleanup path when a tool-completion event
    * (PostToolUse / PostToolUseFailure / Stop) successfully resolves one or
@@ -65,9 +67,12 @@ const RegisterBody = z.object({
   cwd:                   z.string(),
   pid:                   z.number().int(),
   sessionFilePath:       z.string(),
+  cols:                  z.number().int().positive().optional(),
+  rows:                  z.number().int().positive().optional(),
   initialPermissionMode: PermissionModeEnum.optional(),
   claudeAllowRules:      z.array(z.string()).optional(),
 });
+const WinsizeBody = z.object({ cols: z.number().int().positive(), rows: z.number().int().positive() });
 
 const InjectBody = z.object({ data: z.string(), source: z.string() });
 
@@ -152,6 +157,19 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     req.on('close', detach);
     res.on('close', detach);
     return;
+  }
+  const winsize = url.pathname.match(/^\/api\/sessions\/([^/]+)\/winsize$/);
+  if (winsize) {
+    const id = winsize[1]!;
+    if (method !== 'POST') return void res.writeHead(405).end();
+    if (!deps.registry.get(id)) return void res.writeHead(404).end();
+    let body: unknown;
+    try { body = await readJson(req); } catch { return void res.writeHead(400).end('bad json'); }
+    const parsed = WinsizeBody.safeParse(body);
+    if (!parsed.success) return void res.writeHead(400, { 'content-type': 'application/json' })
+                                 .end(JSON.stringify({ error: parsed.error.format() }));
+    deps.onWinsize?.(id, parsed.data.cols, parsed.data.rows);
+    return void res.writeHead(204).end();
   }
   const inj = url.pathname.match(/^\/api\/sessions\/([^/]+)\/inject$/);
   if (inj) {

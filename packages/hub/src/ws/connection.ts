@@ -10,6 +10,7 @@ export interface ConnectionState {
   kind: string | null;
   capabilities: Set<string>;
   subscribedTo: Set<string> | 'all';
+  terminalSubscriptions: Map<string, () => void>;
 }
 
 export interface BroadcastTarget {
@@ -28,7 +29,13 @@ export function handleConnection(
   registerTarget: (target: BroadcastTarget) => void,
   bumpActions: (sessionId: string, delta: 1 | -1) => void,
 ): void {
-  const state: ConnectionState = { ws, kind: null, capabilities: new Set(), subscribedTo: new Set() };
+  const state: ConnectionState = {
+    ws,
+    kind: null,
+    capabilities: new Set(),
+    subscribedTo: new Set(),
+    terminalSubscriptions: new Map(),
+  };
   let identified = false;
   const identifyTimeout = setTimeout(() => {
     if (!identified) ws.close(1002, 'no client.identify within 5s');
@@ -53,6 +60,8 @@ export function handleConnection(
   // a now-departed client). Only relevant when this client had `actions` cap.
   ws.on('close', () => {
     detachAllListener();
+    for (const off of state.terminalSubscriptions.values()) off();
+    state.terminalSubscriptions.clear();
     if (!state.capabilities.has('actions')) return;
     // For 'all' subscribers, every session in the live registry was incremented
     // (originally on subscribe + via the session-added listener for any added
@@ -268,6 +277,34 @@ function handleUpstream(
       type: 'server.error', code: 'prompt-stale',
       message: 'no pending prompt-request for that requestId'
     }));
+    return;
+  }
+  if (msg.type === 'terminal.subscribe') {
+    if (!state.capabilities.has('terminal')) {
+      state.ws.send(JSON.stringify({ type: 'server.error', code: 'terminal-rejected', message: 'missing terminal capability' }));
+      return;
+    }
+    const existing = state.terminalSubscriptions.get(msg.sessionId);
+    if (existing) existing();
+    const send = (payload: object): void => {
+      state.ws.send(JSON.stringify(payload));
+    };
+    const off = deps.onTerminalSubscribe?.(msg.sessionId, send) ?? null;
+    if (!off) {
+      state.terminalSubscriptions.delete(msg.sessionId);
+      state.ws.send(JSON.stringify({ type: 'server.error', code: 'terminal-rejected', message: 'session-offline' }));
+      return;
+    }
+    state.terminalSubscriptions.set(msg.sessionId, off);
+    return;
+  }
+  if (msg.type === 'terminal.unsubscribe') {
+    const off = state.terminalSubscriptions.get(msg.sessionId);
+    if (off) {
+      off();
+      state.terminalSubscriptions.delete(msg.sessionId);
+    }
+    deps.onTerminalUnsubscribe?.(msg.sessionId, (payload) => state.ws.send(JSON.stringify(payload)));
     return;
   }
   if (msg.type === 'input.action' || msg.type === 'input.text') {

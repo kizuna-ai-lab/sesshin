@@ -23,7 +23,6 @@ export const sessions = signal<SessionInfo[]>([]);
 export const selectedSessionId = signal<string | null>(null);
 export const summariesBySession = signal<Record<string, Summary[]>>({});
 export const eventsBySession = signal<Record<string, Event[]>>({});
-export const rawBySession = signal<Record<string, string>>({});
 export const promptRequestsBySession = signal<Record<string, PendingPromptRequest[]>>({});
 export const connected = signal<boolean>(false);
 export const lastEventId = signal<string | null>(null);
@@ -53,7 +52,6 @@ export function removeSession(id: string): void {
   // Prevents stale entries lingering after the agent exits / unregisters.
   deleteSessionKey(summariesBySession, id);
   deleteSessionKey(eventsBySession, id);
-  deleteSessionKey(rawBySession, id);
   deleteSessionKey(promptRequestsBySession, id);
 }
 
@@ -89,13 +87,6 @@ export function addEvent(e: Event): void {
   const cur = eventsBySession.value[e.sessionId] ?? [];
   eventsBySession.value = { ...eventsBySession.value, [e.sessionId]: [e, ...cur].slice(0, 200) };
   lastEventId.value = e.eventId;
-}
-
-export function appendRaw(sessionId: string, data: string): void {
-  const cur = rawBySession.value[sessionId] ?? '';
-  // Keep last ~16 KiB per session to avoid unbounded memory.
-  const next = (cur + data).slice(-16_384);
-  rawBySession.value = { ...rawBySession.value, [sessionId]: next };
 }
 
 export function addPromptRequest(c: PendingPromptRequest): void {

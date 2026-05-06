@@ -1,4 +1,5 @@
-import { selectedSession, summariesBySession, eventsBySession, rawBySession } from '../store.js';
+import { useState } from 'preact/hooks';
+import { selectedSession, summariesBySession, eventsBySession } from '../store.js';
 import { StateBadge } from './StateBadge.js';
 import { ModeBadge } from './ModeBadge.js';
 import { SummaryCard } from './SummaryCard.js';
@@ -7,18 +8,31 @@ import { ActionButtons } from './ActionButtons.js';
 import { TextInput } from './TextInput.js';
 import { InteractionPanel } from './InteractionPanel.js';
 import { CopyBtn } from './CopyBtn.js';
+import { TerminalView } from './TerminalView.js';
 import type { WsClient } from '../ws-client.js';
-
-function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
-}
 
 export function SessionDetail({ ws }: { ws: WsClient }) {
   const s = selectedSession.value;
+  const [tab, setTab] = useState<'summary' | 'events' | 'terminal'>('summary');
   if (!s) return <div style={{ padding: 24, opacity: 0.5 }}>select a session</div>;
   const summaries = summariesBySession.value[s.id] ?? [];
   const events = eventsBySession.value[s.id] ?? [];
-  const raw = rawBySession.value[s.id] ?? '';
+  const tabButton = (key: 'summary' | 'events' | 'terminal', label: string) => (
+    <button
+      onClick={() => setTab(key)}
+      style={{
+        background: tab === key ? '#2a2a2a' : '#111',
+        color: '#eee',
+        border: '1px solid #333',
+        borderRadius: 6,
+        padding: '6px 10px',
+        cursor: 'pointer',
+      }}
+    >
+      {label}
+    </button>
+  );
+
   return (
     <div style={{ padding: 16, color: '#eee' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
@@ -40,18 +54,19 @@ export function SessionDetail({ ws }: { ws: WsClient }) {
           <CopyBtn text={s.sessionFilePath} label="copy path" />
         </div>
       )}
-      <SummaryCard summary={summaries[0] ?? null} />
       <InteractionPanel ws={ws} sessionId={s.id} />
       <ActionButtons ws={ws} sessionId={s.id} />
       <TextInput ws={ws} sessionId={s.id} />
-      <h3>Event timeline</h3>
-      <EventTimeline events={events} />
-      <h3>Terminal output (last 16 KiB)</h3>
-      <pre style={{
-        background: '#000', color: '#ccc', padding: 8, borderRadius: 4,
-        maxHeight: 200, overflowY: 'auto', fontFamily: 'monospace', fontSize: 12,
-        whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-      }}>{stripAnsi(raw)}</pre>
+
+      <div style={{ display: 'flex', gap: 8, margin: '16px 0 12px 0' }}>
+        {tabButton('summary', 'Summary')}
+        {tabButton('events', 'Events')}
+        {tabButton('terminal', 'Terminal')}
+      </div>
+
+      {tab === 'summary' && <SummaryCard summary={summaries[0] ?? null} />}
+      {tab === 'events' && <EventTimeline events={events} />}
+      {tab === 'terminal' && <TerminalView ws={ws} sessionId={s.id} />}
     </div>
   );
 }

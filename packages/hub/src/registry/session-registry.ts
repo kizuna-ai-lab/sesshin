@@ -8,6 +8,8 @@ export interface RegisterInput {
   cwd: string;
   pid: number;
   sessionFilePath: string;
+  cols?: number;
+  rows?: number;
 }
 
 function defaultSubstate(): Substate {
@@ -55,6 +57,8 @@ export class SessionRegistry extends EventEmitter {
       substate: defaultSubstate(),
       lastSummaryId: null,
       sessionFilePath: input.sessionFilePath,
+      cols: input.cols,
+      rows: input.rows,
       fileTailCursor: 0,
       lastHeartbeat: Date.now(),
       claudeAllowRules: [],
@@ -171,6 +175,17 @@ export class SessionRegistry extends EventEmitter {
     if (!s) return false;
     s.lastHeartbeat = Date.now();
     this.emit('substate-changed', this.publicView(s));
+    return true;
+  }
+
+  setSessionWinsize(id: string, cols: number, rows: number): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    if (cols <= 0 || rows <= 0) return false;
+    if (s.cols === cols && s.rows === rows) return true;
+    s.cols = cols;
+    s.rows = rows;
+    this.emit('config-changed', this.publicView(s));
     return true;
   }
 

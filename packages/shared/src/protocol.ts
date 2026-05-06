@@ -7,7 +7,7 @@ import { ActionEnum } from './actions.js';
 export const PROTOCOL_VERSION = 1 as const;
 
 export const ClientKindEnum = z.enum(['debug-web','telegram-adapter','m5stick','watch','mobile','other']);
-export const CapabilityEnum = z.enum(['summary','events','raw','actions','voice','history','state','attention']);
+export const CapabilityEnum = z.enum(['summary','events','terminal','actions','voice','history','state','attention']);
 
 // ---- Upstream (client → hub) ----
 export const ClientIdentifySchema = z.object({
@@ -27,6 +27,14 @@ export const SubscribeSchema = z.object({
 export const UnsubscribeSchema = z.object({
   type:     z.literal('unsubscribe'),
   sessions: z.array(z.string()),
+});
+export const TerminalSubscribeSchema = z.object({
+  type:      z.literal('terminal.subscribe'),
+  sessionId: z.string(),
+});
+export const TerminalUnsubscribeSchema = z.object({
+  type:      z.literal('terminal.unsubscribe'),
+  sessionId: z.string(),
 });
 export const InputTextSchema = z.object({
   type:      z.literal('input.text'),
@@ -77,6 +85,7 @@ export const PromptResponseSchema = z.object({
 
 export const UpstreamMessageSchema = z.discriminatedUnion('type', [
   ClientIdentifySchema, SubscribeSchema, UnsubscribeSchema,
+  TerminalSubscribeSchema, TerminalUnsubscribeSchema,
   InputTextSchema, InputActionSchema, ClientPongSchema,
   PromptResponseSchema,
 ]);
@@ -124,11 +133,30 @@ export const SessionAttentionSchema = z.object({
   reason:     z.string(),
   summaryId:  z.string().optional(),
 });
-export const SessionRawSchema = z.object({
-  type:      z.literal('session.raw'),
+export const TerminalSnapshotSchema = z.object({
+  type:      z.literal('terminal.snapshot'),
+  sessionId: z.string(),
+  seq:       z.number().int(),
+  cols:      z.number().int().positive(),
+  rows:      z.number().int().positive(),
+  data:      z.string(),
+});
+export const TerminalDeltaSchema = z.object({
+  type:      z.literal('terminal.delta'),
   sessionId: z.string(),
   seq:       z.number().int(),
   data:      z.string(),
+});
+export const TerminalResizeSchema = z.object({
+  type:      z.literal('terminal.resize'),
+  sessionId: z.string(),
+  cols:      z.number().int().positive(),
+  rows:      z.number().int().positive(),
+});
+export const TerminalEndedSchema = z.object({
+  type:      z.literal('terminal.ended'),
+  sessionId: z.string(),
+  reason:    z.string().nullable().optional(),
 });
 export const ServerErrorSchema = z.object({
   type:    z.literal('server.error'),
@@ -227,7 +255,8 @@ export const SessionChildChangedSchema = z.object({
 export const DownstreamMessageSchema = z.discriminatedUnion('type', [
   ServerHelloSchema, SessionListSchema, SessionAddedSchema, SessionRemovedSchema,
   SessionStateMsgSchema, SessionEventMsgSchema, SessionSummaryMsgSchema,
-  SessionAttentionSchema, SessionRawSchema, ServerErrorSchema, ServerPingSchema,
+  SessionAttentionSchema, TerminalSnapshotSchema, TerminalDeltaSchema,
+  TerminalResizeSchema, TerminalEndedSchema, ServerErrorSchema, ServerPingSchema,
   SessionPromptRequestSchema, SessionPromptRequestResolvedSchema,
   SessionConfigChangedSchema, SessionChildChangedSchema,
 ]);

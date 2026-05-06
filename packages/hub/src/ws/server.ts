@@ -7,6 +7,7 @@ import type { SessionRegistry } from '../registry/session-registry.js';
 import type { EventBus } from '../event-bus.js';
 import type { PtyTap } from '../observers/pty-tap.js';
 import type { ApprovalManager } from '../approval-manager.js';
+import type { HeadlessSnapshot } from '../observers/headless-term.js';
 import { handleConnection, type BroadcastTarget } from './connection.js';
 
 export interface WsServerDeps {
@@ -44,6 +45,9 @@ export interface WsServerDeps {
    * blocked on an absent remote.
    */
   onLastActionsClientGone?: (sessionId: string) => void;
+  onTerminalSubscribe?: (sessionId: string, send: (msg: object) => void) => (() => void) | null;
+  onTerminalUnsubscribe?: (sessionId: string, send: (msg: object) => void) => void;
+  getTerminalSnapshot?: (sessionId: string) => ({ seq: number } & HeadlessSnapshot) | null;
 }
 
 export interface WsServerInstance {
@@ -72,7 +76,10 @@ const MIME: Record<string, string> = {
 function capabilityRequiredFor(msgType: string): string | null {
   switch (msgType) {
     case 'session.summary':              return 'summary';
-    case 'session.raw':                  return 'raw';
+    case 'terminal.snapshot':
+    case 'terminal.delta':
+    case 'terminal.resize':
+    case 'terminal.ended':               return 'terminal';
     case 'session.event':                return 'events';
     case 'session.attention':            return 'attention';
     case 'session.prompt-request':
