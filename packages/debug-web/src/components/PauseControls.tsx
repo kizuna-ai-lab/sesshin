@@ -34,7 +34,8 @@ export function PauseControls({ ws, sessionId, paused }: PauseControlsProps) {
           border: '1px solid #b58900', borderRadius: 3,
           fontFamily: 'monospace', fontSize: 12,
         }}>
-          Session paused — claude is suspended in the inner shell. Click Resume,
+          Session paused — claude is suspended; the inner shell is live.
+          Type below to run shell commands, click Resume to continue claude,
           or run <code>fg</code> in the host terminal.
         </div>
       )}

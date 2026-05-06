@@ -4,16 +4,27 @@ import type { WsClient } from '../ws-client.js';
 export interface TextInputProps {
   ws: WsClient;
   sessionId: string;
-  /** When true (session.substate.paused), gray out the textarea + button so
-   * we don't accidentally type into the inner shell while claude is suspended. */
+  /** Hard disable — grays out and blocks send. Reserved for future
+   * "session-not-yet-ready" / "session-gone" cases. NOT used for pause
+   * (in nested-shell architecture, pause means the inner shell is live
+   * and accepts input — disabling here would be needlessly restrictive). */
   disabled?: boolean;
+  /** True when the inner shell currently holds PTY foreground (claude is
+   * suspended). Only swaps the placeholder so users know typing now goes
+   * to the shell, not to claude. The textarea stays active. */
+  paused?: boolean;
 }
 
-export function TextInput({ ws, sessionId, disabled = false }: TextInputProps) {
+export function TextInput({ ws, sessionId, disabled = false, paused = false }: TextInputProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const placeholder = disabled
+    ? 'session unavailable'
+    : paused
+      ? 'shell command (claude paused)…'
+      : 'message claude…';
   return (
     <div style={{ marginBottom: 12 }}>
-      <textarea ref={inputRef} placeholder={disabled ? 'session paused' : 'message claude…'} rows={3}
+      <textarea ref={inputRef} placeholder={placeholder} rows={3}
         disabled={disabled}
         style={{
           width: '100%',
