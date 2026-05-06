@@ -20,6 +20,7 @@ function defaultSubstate(): Substate {
     permissionMode: 'default',
     compacting: false,
     cwd: null,
+    paused: false,
   };
 }
 

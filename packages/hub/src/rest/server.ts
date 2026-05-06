@@ -44,6 +44,13 @@ export interface RestServerDeps {
   /** Update the PTY size reported by the CLI for a session. */
   onWinsize?: (sessionId: string, cols: number, rows: number) => void;
   /**
+   * Called when the cli's pause-monitor reports a state flip. In the
+   * nested-shell architecture, the cli polls /proc/<shellPid>/stat tpgid;
+   * paused=true means the inner shell holds foreground (claude is suspended);
+   * paused=false means a job (claude) holds foreground.
+   */
+  onPausedReport?: (sessionId: string, paused: boolean) => void;
+  /**
    * Called from the stale-cleanup path when a tool-completion event
    * (PostToolUse / PostToolUseFailure / Stop) successfully resolves one or
    * more pending approvals via `resolveByToolUseId/Fingerprint/Singleton`.
@@ -73,6 +80,7 @@ const RegisterBody = z.object({
   claudeAllowRules:      z.array(z.string()).optional(),
 });
 const WinsizeBody = z.object({ cols: z.number().int().positive(), rows: z.number().int().positive() });
+const PausedReportBody = z.object({ paused: z.boolean() });
 
 const InjectBody = z.object({ data: z.string(), source: z.string() });
 
@@ -169,6 +177,22 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     if (!parsed.success) return void res.writeHead(400, { 'content-type': 'application/json' })
                                  .end(JSON.stringify({ error: parsed.error.format() }));
     deps.onWinsize?.(id, parsed.data.cols, parsed.data.rows);
+    return void res.writeHead(204).end();
+  }
+  // cli's pause-monitor reports tpgid-derived paused state. Hub mirrors into
+  // substate.paused and the existing substate-changed broadcast carries it
+  // to debug-web for banner / input gating.
+  const pausedReport = url.pathname.match(/^\/api\/sessions\/([^/]+)\/paused-state$/);
+  if (pausedReport) {
+    const id = pausedReport[1]!;
+    if (method !== 'POST') return void res.writeHead(405).end();
+    if (!deps.registry.get(id)) return void res.writeHead(404).end();
+    let body: unknown;
+    try { body = await readJson(req); } catch { return void res.writeHead(400).end('bad json'); }
+    const parsed = PausedReportBody.safeParse(body);
+    if (!parsed.success) return void res.writeHead(400, { 'content-type': 'application/json' })
+                                 .end(JSON.stringify({ error: parsed.error.format() }));
+    deps.onPausedReport?.(id, parsed.data.paused);
     return void res.writeHead(204).end();
   }
   const inj = url.pathname.match(/^\/api\/sessions\/([^/]+)\/inject$/);

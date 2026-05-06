@@ -62,6 +62,11 @@ const env = {
   SESSHIN_CLAUDE_BIN: STUB_CLAUDE,
   SESSHIN_SUMMARIZER: 'heuristic',
   HOME: tmp,        // isolate ~/.claude/, ~/.cache/sesshin/
+  // Force a deterministic POSIX shell for the inner shell sesshin-cli spawns.
+  // Without this, e2e picks whatever the developer's $SHELL is (zsh / fish /
+  // ...) and the empty HOME triggers first-run interactive setup wizards
+  // (e.g. zsh-newuser-install) that block the claude command.
+  SHELL: '/bin/sh',
 };
 
 function fail(msg, extra = null) {

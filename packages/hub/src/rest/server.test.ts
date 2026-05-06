@@ -63,6 +63,48 @@ describe('/api/sessions/:id/raw — streaming', () => {
   });
 });
 
+describe('/api/sessions/:id/paused-state', () => {
+  it('forwards POST {paused:bool} to onPausedReport and returns 204', async () => {
+    const reports: { id: string; paused: boolean }[] = [];
+    const registry = new SessionRegistry();
+    const sid = 'reporter';
+    registry.register({ id: sid, name: 'n', agent: 'claude-code', cwd: '/tmp', pid: 1, sessionFilePath: '/tmp/x' });
+    const server = createRestServer({
+      registry,
+      onPausedReport: (id, paused) => { reports.push({ id, paused }); },
+    });
+    await server.listen(0, '127.0.0.1');
+    const localPort = server.address().port;
+    try {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/${sid}/paused-state`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ paused: true }),
+      });
+      expect(r.status).toBe(204);
+      expect(reports).toEqual([{ id: sid, paused: true }]);
+    } finally { await server.close(); }
+  });
+  it('rejects bad json with 400, unknown session with 404', async () => {
+    const registry = new SessionRegistry();
+    const sid = 'reporter';
+    registry.register({ id: sid, name: 'n', agent: 'claude-code', cwd: '/tmp', pid: 1, sessionFilePath: '/tmp/x' });
+    const server = createRestServer({ registry, onPausedReport: () => {} });
+    await server.listen(0, '127.0.0.1');
+    const localPort = server.address().port;
+    try {
+      const bad = await fetch(`http://127.0.0.1:${localPort}/api/sessions/${sid}/paused-state`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{not-json',
+      });
+      expect(bad.status).toBe(400);
+      const missing = await fetch(`http://127.0.0.1:${localPort}/api/sessions/nope/paused-state`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"paused":true}',
+      });
+      expect(missing.status).toBe(404);
+    } finally { await server.close(); }
+  });
+});
+
 describe('shutdown', () => {
   it('close() resolves promptly even with active long-poll connections', async () => {
     // Regression: graceful shutdown previously hung forever when long-lived

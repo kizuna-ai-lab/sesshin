@@ -602,6 +602,9 @@ export async function startHub(): Promise<HubInstance> {
       terminals.get(sessionId)?.resize(cols, rows);
       wsRef?.broadcast({ type: 'terminal.resize', sessionId, cols, rows });
     },
+    onPausedReport: (sessionId, paused) => {
+      registry.patchSubstate(sessionId, { paused });
+    },
     listClients: (sid) => wsRef?.listClients(sid) ?? [],
     ...adapters.restDeps,
   });

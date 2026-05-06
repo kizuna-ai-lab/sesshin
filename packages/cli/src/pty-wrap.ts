@@ -8,8 +8,6 @@ export interface PtyWrapInput {
   env: Record<string, string>;
   cols: number;
   rows: number;
-  /** When true, install raw-mode passthrough on the parent's stdin/stdout. */
-  passthrough: boolean;
 }
 
 export interface PtyWrap {
@@ -26,8 +24,6 @@ export function wrapPty(opts: PtyWrapInput): PtyWrap {
     name: 'xterm-256color', cwd: opts.cwd, env: opts.env, cols: opts.cols, rows: opts.rows,
   });
 
-  if (opts.passthrough) installPassthrough(proc);
-
   const dataListeners = new Set<(d: string) => void>();
   proc.onData((d) => { for (const fn of dataListeners) fn(d); });
 
@@ -39,18 +35,4 @@ export function wrapPty(opts: PtyWrapInput): PtyWrap {
     kill: (sig) => proc.kill(sig),
     get pid() { return proc.pid; },
   };
-}
-
-function installPassthrough(proc: IPty): void {
-  if (process.stdin.isTTY) process.stdin.setRawMode(true);
-  process.stdin.resume();
-  process.stdin.on('data', (d) => proc.write(typeof d === 'string' ? d : d.toString('utf-8')));
-  proc.onData((d) => process.stdout.write(d));
-  const onResize = (): void => proc.resize(process.stdout.columns ?? 80, process.stdout.rows ?? 24);
-  process.stdout.on('resize', onResize);
-  proc.onExit(() => {
-    if (process.stdin.isTTY) process.stdin.setRawMode(false);
-    process.stdin.pause();
-    process.stdout.off('resize', onResize);
-  });
 }

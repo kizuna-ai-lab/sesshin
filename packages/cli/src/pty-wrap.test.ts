@@ -10,7 +10,6 @@ describe('wrapPty', () => {
       cwd: process.cwd(),
       env: process.env as Record<string, string>,
       cols: 80, rows: 24,
-      passthrough: false,  // no real tty in vitest
     });
     wrapper.onData((d) => out.push(d));
     const exit = await new Promise<number>((r) => wrapper.onExit((c) => r(c)));
@@ -25,7 +24,6 @@ describe('wrapPty', () => {
       cwd: process.cwd(),
       env: process.env as Record<string, string>,
       cols: 80, rows: 24,
-      passthrough: false,
     });
     wrapper.onData((d) => out.push(d));
     wrapper.write('hi\n');
