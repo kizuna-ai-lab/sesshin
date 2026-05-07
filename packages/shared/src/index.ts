@@ -6,3 +6,4 @@ export * from './hook-events.js';
 export * from './protocol.js';
 export * from './tool-fingerprint.js';
 export * from './permission.js';
+export * from './ids.js';
