@@ -5,9 +5,24 @@ import { runHistory } from './subcommands/history.js';
 import { runCommandsInstall } from './subcommands/commands-install.js';
 import { runCommandsUninstall } from './subcommands/commands-uninstall.js';
 import { runLog } from './subcommands/log.js';
+import { runPause } from './subcommands/pause.js';
+import { runResume } from './subcommands/resume.js';
+import { runKill } from './subcommands/kill.js';
+import { runRename } from './subcommands/rename.js';
 import { requireLiveSession } from './require-live-session.js';
 
-const SESSION_REQUIRED = new Set(['status', 'clients', 'history', 'log']);
+const SESSION_REQUIRED = new Set(['status', 'clients', 'history', 'log', 'pause', 'resume', 'kill', 'rename']);
+
+/**
+ * Resolve the hub base URL from env, matching the convention used by the
+ * other subcommands (status/clients/history/log read SESSHIN_HUB_URL directly
+ * with the same default). Centralised here so the lifecycle subcommands —
+ * which take an injectable `fetch` for testability — can be wired through
+ * `mainWithDeps` rather than reading `process.env` themselves.
+ */
+function hubUrl(env: MainDeps['env']): string {
+  return env.SESSHIN_HUB_URL ?? 'http://127.0.0.1:9663';
+}
 
 export interface MainDeps {
   argv: string[];
@@ -94,8 +109,39 @@ async function dispatch(deps: MainDeps, cmd: string | undefined, rest: string[])
         ...(filter ? { filter } : {}),
       });
     }
+    case 'pause': {
+      const sid = pickFlag(rest, '--session') ?? deps.env.SESSHIN_SESSION_ID;
+      if (!sid) { deps.stderr.write('usage: sesshin pause [--session <id>]\n'); return 2; }
+      return runPause({ sessionId: sid, hubUrl: hubUrl(deps.env), fetch: deps.fetch });
+    }
+    case 'resume': {
+      const sid = pickFlag(rest, '--session') ?? deps.env.SESSHIN_SESSION_ID;
+      if (!sid) { deps.stderr.write('usage: sesshin resume [--session <id>]\n'); return 2; }
+      return runResume({ sessionId: sid, hubUrl: hubUrl(deps.env), fetch: deps.fetch });
+    }
+    case 'kill': {
+      const sid = pickFlag(rest, '--session') ?? deps.env.SESSHIN_SESSION_ID;
+      if (!sid) { deps.stderr.write('usage: sesshin kill [--session <id>]\n'); return 2; }
+      return runKill({ sessionId: sid, hubUrl: hubUrl(deps.env), fetch: deps.fetch });
+    }
+    case 'rename': {
+      const sid = pickFlag(rest, '--session') ?? deps.env.SESSHIN_SESSION_ID;
+      // Positional args = everything that isn't a flag or the value of a flag.
+      // We strip `--session <value>` pairs explicitly so the new name can
+      // legitimately be multiple words (e.g. `sesshin rename my new name`).
+      const positional: string[] = [];
+      for (let i = 0; i < rest.length; i++) {
+        const a = rest[i]!;
+        if (a === '--session') { i++; continue; }    // skip flag value
+        if (a.startsWith('--')) continue;            // skip other flags
+        positional.push(a);
+      }
+      const name = positional.join(' ').trim();
+      if (!sid || !name) { deps.stderr.write('usage: sesshin rename <new name> [--session <id>]\n'); return 2; }
+      return runRename({ sessionId: sid, name, hubUrl: hubUrl(deps.env), fetch: deps.fetch });
+    }
     default:
-      deps.stderr.write(`usage: sesshin <claude|status|clients|history|commands|log> ...\n`);
+      deps.stderr.write(`usage: sesshin <claude|status|clients|history|commands|log|pause|resume|kill|rename> ...\n`);
       return 2;
   }
 }

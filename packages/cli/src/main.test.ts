@@ -90,3 +90,94 @@ describe('main() session-context gate', () => {
     expect(stderr.join('')).not.toMatch(/^sesshin: not in a live sesshin session/);
   });
 });
+
+/**
+ * Dispatch coverage for lifecycle subcommands. Each test stubs the gate
+ * (`/api/sessions/:id` → 200) AND the lifecycle POST in a single fetch
+ * function, so the gate accepts and dispatch reaches `runPause` etc.
+ *
+ * To distinguish the two calls we look at the URL: gate hits `/api/sessions/<id>`
+ * (no trailing path), lifecycle hits `.../lifecycle`.
+ */
+describe('main() dispatch — lifecycle subcommands', () => {
+  function fetchStub(): {
+    fetch: typeof globalThis.fetch;
+    lifecycleCalls: Array<{ url: string; body: unknown }>;
+  } {
+    const lifecycleCalls: Array<{ url: string; body: unknown }> = [];
+    const f = (async (input: unknown, init?: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/lifecycle')) {
+        const i = init as RequestInit | undefined;
+        lifecycleCalls.push({ url, body: JSON.parse((i?.body as string) ?? '{}') });
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      // gate probe
+      return new Response(JSON.stringify({ id: 'sess' }), { status: 200 });
+    }) as typeof globalThis.fetch;
+    return { fetch: f, lifecycleCalls };
+  }
+
+  it('pause: posts {action:"pause"} when --session is given', async () => {
+    const { fetch, lifecycleCalls } = fetchStub();
+    const { deps } = makeDeps({ argv: ['pause', '--session', 'sess'], env: {}, fetch });
+    const code = await mainWithDeps(deps);
+    expect(code).toBe(0);
+    expect(lifecycleCalls).toHaveLength(1);
+    expect(lifecycleCalls[0]!.body).toEqual({ action: 'pause' });
+  });
+
+  it('resume: falls back to SESSHIN_SESSION_ID env', async () => {
+    const { fetch, lifecycleCalls } = fetchStub();
+    const { deps } = makeDeps({ argv: ['resume'], env: { SESSHIN_SESSION_ID: 'sess' }, fetch });
+    const code = await mainWithDeps(deps);
+    expect(code).toBe(0);
+    expect(lifecycleCalls[0]!.body).toEqual({ action: 'resume' });
+    expect(lifecycleCalls[0]!.url).toContain('/api/sessions/sess/lifecycle');
+  });
+
+  it('kill: posts {action:"kill"}', async () => {
+    const { fetch, lifecycleCalls } = fetchStub();
+    const { deps } = makeDeps({ argv: ['kill', '--session', 'sess'], env: {}, fetch });
+    const code = await mainWithDeps(deps);
+    expect(code).toBe(0);
+    expect(lifecycleCalls[0]!.body).toEqual({ action: 'kill' });
+  });
+
+  it('rename: joins positional args into a multi-word name and includes payload', async () => {
+    const { fetch, lifecycleCalls } = fetchStub();
+    const { deps } = makeDeps({
+      argv: ['rename', 'my', 'fancy', 'session', '--session', 'sess'],
+      env: {},
+      fetch,
+    });
+    const code = await mainWithDeps(deps);
+    expect(code).toBe(0);
+    expect(lifecycleCalls[0]!.body).toEqual({ action: 'rename', payload: { name: 'my fancy session' } });
+  });
+
+  it('rename: with no name returns 2 with usage error', async () => {
+    // No fetch needed because the gate runs first; supply env so the gate
+    // doesn't short-circuit with its own diagnostic, then a fetch stub that
+    // accepts the gate but would reject any POST (we should never reach it).
+    const { fetch } = fetchStub();
+    const { deps, stderr } = makeDeps({
+      argv: ['rename', '--session', 'sess'],
+      env: { SESSHIN_SESSION_ID: 'sess' },
+      fetch,
+    });
+    const code = await mainWithDeps(deps);
+    expect(code).toBe(2);
+    expect(stderr.join('')).toMatch(/usage: sesshin rename/);
+  });
+
+  it('pause: with no --session and no env returns 3 (gate kicks in first)', async () => {
+    // The session-context gate runs before dispatch, so a missing session
+    // surfaces as the gate's diagnostic (exit 3), not the subcommand usage
+    // error (exit 2). This documents the layered-validation contract.
+    const { deps, stderr } = makeDeps({ argv: ['pause'], env: {} });
+    const code = await mainWithDeps(deps);
+    expect(code).toBe(3);
+    expect(stderr.join('')).toMatch(/^sesshin: not in a live sesshin session/);
+  });
+});
