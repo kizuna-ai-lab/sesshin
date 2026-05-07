@@ -254,13 +254,13 @@ export const SessionChildChangedSchema = z.object({
 
 export const RateLimitWindowSchema = z.object({
   used_percentage: z.number(),
-  resets_at:       z.number(),
+  resets_at:       z.number().int(),  // Unix seconds (matches CC's source)
 });
 
 export const RateLimitsStateSchema = z.object({
   five_hour:    RateLimitWindowSchema.nullable(),
   seven_day:    RateLimitWindowSchema.nullable(),
-  observed_at:  z.number(),
+  observed_at:  z.number().int(),     // Unix milliseconds (hub-stamped via Date.now())
 });
 
 export const SessionRateLimitsSchema = z.object({
