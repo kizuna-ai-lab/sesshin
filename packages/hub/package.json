@@ -3,9 +3,14 @@
   "version": "0.0.0",
   "type": "module",
   "private": true,
-  "bin": { "sesshin-hub": "bin/sesshin-hub" },
+  "bin": {
+    "sesshin-hub": "bin/sesshin-hub"
+  },
   "exports": {
-    ".": { "types": "./dist/main.d.ts", "import": "./dist/main.js" },
+    ".": {
+      "types": "./dist/main.d.ts",
+      "import": "./dist/main.js"
+    },
     "./agents/claude/session-file-path": {
       "types": "./dist/agents/claude/session-file-path.d.ts",
       "import": "./dist/agents/claude/session-file-path.js"
@@ -22,11 +27,13 @@
     "@sesshin/shared": "workspace:*",
     "@xterm/addon-serialize": "^0.13.0",
     "@xterm/headless": "^5.5.0",
-    "ws": "^8.18.0",
+    "better-sqlite3": "^12.9.0",
     "pino": "^9.0.0",
+    "ws": "^8.18.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
     "msw": "^2.4.0",
