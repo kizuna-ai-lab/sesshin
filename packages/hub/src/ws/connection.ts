@@ -231,6 +231,16 @@ function handleUpstream(
         }
       }
     }
+    for (const sid of addedForReplay) {
+      const rl = deps.registry.getRateLimits(sid);
+      if (rl) {
+        state.ws.send(JSON.stringify({
+          type: 'session.rate-limits',
+          sessionId: sid,
+          rateLimits: rl,
+        }));
+      }
+    }
     if (msg.since && state.capabilities.has('events')) {
       const sids = state.subscribedTo === 'all' ? deps.registry.list().map((s) => s.id) : Array.from(state.subscribedTo);
       for (const sid of sids) {
