@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { runRelay, type RelayDeps } from './relay.js';
 
 function makeDeps(overrides: Partial<RelayDeps> = {}): RelayDeps {

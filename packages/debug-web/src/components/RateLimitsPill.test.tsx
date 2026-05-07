@@ -1,15 +1,25 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render } from 'preact';
 import { RateLimitsPill } from './RateLimitsPill.js';
 import { rateLimitsBySession, applyRateLimits } from '../store.js';
+
+const mounted: HTMLDivElement[] = [];
 
 beforeEach(() => {
   rateLimitsBySession.value = {};
 });
 
+afterEach(() => {
+  // Tear down each mount so the component's setInterval cleanup fires;
+  // otherwise timers leak across tests and can produce flake.
+  for (const div of mounted) render(null, div);
+  mounted.length = 0;
+});
+
 function mount(sessionId: string): HTMLDivElement {
   const div = document.createElement('div');
   render(<RateLimitsPill sessionId={sessionId} />, div);
+  mounted.push(div);
   return div;
 }
 
