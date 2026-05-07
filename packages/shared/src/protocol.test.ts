@@ -6,6 +6,8 @@ import {
   SessionPromptRequestResolvedSchema, SessionConfigChangedSchema,
   SessionChildChangedSchema, RateLimitWindowSchema, RateLimitsStateSchema,
   SessionRateLimitsSchema,
+  SessionLifecycleSchema, HistoryRequestSchema,
+  SessionMessageSchema, SessionEndedSchema,
 } from './protocol.js';
 
 describe('protocol upstream', () => {
@@ -272,5 +274,76 @@ describe('SessionRateLimitsSchema', () => {
       sessionId: 's1',
       rateLimits: { five_hour: null, seven_day: null, observed_at: 1 },
     })).toThrow();
+  });
+});
+
+describe('lifecycle protocol', () => {
+  it('parses session.lifecycle pause', () => {
+    const msg = {
+      type: 'session.lifecycle' as const,
+      requestId: 'r1', sessionId: 's', action: 'pause' as const,
+    };
+    expect(SessionLifecycleSchema.parse(msg)).toEqual(msg);
+  });
+  it('rejects unknown action', () => {
+    expect(() => SessionLifecycleSchema.parse({
+      type: 'session.lifecycle', requestId: 'r1', sessionId: 's', action: 'detonate',
+    })).toThrow();
+  });
+  it('accepts rename without payload at schema level (handler enforces payload.name)', () => {
+    const msg = { type: 'session.lifecycle' as const, requestId: 'r1', sessionId: 's', action: 'rename' as const };
+    expect(SessionLifecycleSchema.parse(msg)).toEqual(msg);
+  });
+});
+
+describe('history.request', () => {
+  it('parses with beforeId null', () => {
+    const msg = { type: 'history.request' as const, requestId: 'r', sessionId: 's', beforeId: null, limit: 50 };
+    expect(HistoryRequestSchema.parse(msg)).toEqual(msg);
+  });
+  it('rejects limit > 200', () => {
+    expect(() => HistoryRequestSchema.parse({
+      type: 'history.request', requestId: 'r', sessionId: 's', beforeId: null, limit: 201,
+    })).toThrow();
+  });
+});
+
+describe('session.message and session.ended', () => {
+  it('parses session.message', () => {
+    const msg = {
+      type: 'session.message' as const,
+      sessionId: 's',
+      message: {
+        id: '01HZ' + 'A'.repeat(22),
+        senderType: 'user' as const,
+        content: 'hi',
+        format: 'text' as const,
+        requiresUserInput: false,
+        createdAt: 1000,
+      },
+    };
+    expect(SessionMessageSchema.parse(msg)).toEqual(msg);
+  });
+  it('parses session.ended', () => {
+    const msg = { type: 'session.ended' as const, sessionId: 's', endedAt: 1000, endReason: 'killed' as const };
+    expect(SessionEndedSchema.parse(msg)).toEqual(msg);
+  });
+});
+
+describe('server.error new optional fields', () => {
+  it('accepts requestId and sessionId', () => {
+    const msg = { type: 'server.error' as const, code: 'lifecycle.invalid-state', message: 'not idle', sessionId: 's', requestId: 'r' };
+    expect(ServerErrorSchema.parse(msg)).toEqual(msg);
+  });
+});
+
+describe('SubscribeSchema includeEnded', () => {
+  it('defaults includeEnded to false', () => {
+    const parsed = SubscribeSchema.parse({ type: 'subscribe', sessions: 'all', since: null });
+    expect(parsed.includeEnded).toBe(false);
+  });
+  it('accepts includeEnded true', () => {
+    const parsed = SubscribeSchema.parse({ type: 'subscribe', sessions: 'all', since: null, includeEnded: true });
+    expect(parsed.includeEnded).toBe(true);
   });
 });

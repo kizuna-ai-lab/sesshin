@@ -7,7 +7,10 @@ import { ActionEnum } from './actions.js';
 export const PROTOCOL_VERSION = 1 as const;
 
 export const ClientKindEnum = z.enum(['debug-web','telegram-adapter','m5stick','watch','mobile','other']);
-export const CapabilityEnum = z.enum(['summary','events','terminal','actions','voice','history','state','attention']);
+export const CapabilityEnum = z.enum([
+  'summary','events','terminal','actions','state','attention',
+  'messages','catalog','lifecycle',
+]);
 
 // ---- Upstream (client → hub) ----
 export const ClientIdentifySchema = z.object({
@@ -20,9 +23,10 @@ export const ClientIdentifySchema = z.object({
   }),
 });
 export const SubscribeSchema = z.object({
-  type:     z.literal('subscribe'),
-  sessions: z.union([z.array(z.string()), z.literal('all')]),
-  since:    z.string().nullable(),
+  type:          z.literal('subscribe'),
+  sessions:      z.union([z.array(z.string()), z.literal('all')]),
+  since:         z.string().nullable(),
+  includeEnded:  z.boolean().default(false),
 });
 export const UnsubscribeSchema = z.object({
   type:     z.literal('unsubscribe'),
@@ -49,6 +53,24 @@ export const InputActionSchema = z.object({
 export const ClientPongSchema = z.object({
   type:  z.literal('client.pong'),
   nonce: z.string(),
+});
+
+export const LifecycleActionEnum = z.enum(['pause','resume','kill','rename','delete']);
+
+export const SessionLifecycleSchema = z.object({
+  type:      z.literal('session.lifecycle'),
+  requestId: z.string(),
+  sessionId: z.string(),
+  action:    LifecycleActionEnum,
+  payload:   z.object({ name: z.string().min(1) }).optional(),
+});
+
+export const HistoryRequestSchema = z.object({
+  type:      z.literal('history.request'),
+  requestId: z.string(),
+  sessionId: z.string(),
+  beforeId:  z.string().nullable(),
+  limit:     z.number().int().min(1).max(200),
 });
 
 // ---- Prompt request / response (PromptRequest shape, mirrors claude internal) ----
@@ -88,6 +110,7 @@ export const UpstreamMessageSchema = z.discriminatedUnion('type', [
   TerminalSubscribeSchema, TerminalUnsubscribeSchema,
   InputTextSchema, InputActionSchema, ClientPongSchema,
   PromptResponseSchema,
+  SessionLifecycleSchema, HistoryRequestSchema,
 ]);
 export type UpstreamMessage = z.infer<typeof UpstreamMessageSchema>;
 
@@ -159,9 +182,11 @@ export const TerminalEndedSchema = z.object({
   reason:    z.string().nullable().optional(),
 });
 export const ServerErrorSchema = z.object({
-  type:    z.literal('server.error'),
-  code:    z.string(),
-  message: z.string().optional(),
+  type:      z.literal('server.error'),
+  code:      z.string(),
+  message:   z.string().optional(),
+  sessionId: z.string().optional(),
+  requestId: z.string().optional(),
 });
 export const ServerPingSchema = z.object({
   type:  z.literal('server.ping'),
@@ -269,6 +294,33 @@ export const SessionRateLimitsSchema = z.object({
   rateLimits:  RateLimitsStateSchema,
 });
 
+export const MessageSenderEnum = z.enum(['user','agent','system']);
+export const MessageFormatEnum = z.enum(['text','markdown']);
+
+export const MessageSchema = z.object({
+  id:                z.string(),
+  senderType:        MessageSenderEnum,
+  content:           z.string(),
+  format:            MessageFormatEnum,
+  requiresUserInput: z.boolean(),
+  createdAt:         z.number().int(),
+});
+
+export const SessionMessageSchema = z.object({
+  type:      z.literal('session.message'),
+  sessionId: z.string(),
+  message:   MessageSchema,
+});
+
+export const EndReasonEnum = z.enum(['normal','interrupted','killed']);
+
+export const SessionEndedSchema = z.object({
+  type:      z.literal('session.ended'),
+  sessionId: z.string(),
+  endedAt:   z.number().int(),
+  endReason: EndReasonEnum,
+});
+
 export const DownstreamMessageSchema = z.discriminatedUnion('type', [
   ServerHelloSchema, SessionListSchema, SessionAddedSchema, SessionRemovedSchema,
   SessionStateMsgSchema, SessionEventMsgSchema, SessionSummaryMsgSchema,
@@ -277,6 +329,7 @@ export const DownstreamMessageSchema = z.discriminatedUnion('type', [
   SessionPromptRequestSchema, SessionPromptRequestResolvedSchema,
   SessionConfigChangedSchema, SessionChildChangedSchema,
   SessionRateLimitsSchema,
+  SessionMessageSchema, SessionEndedSchema,
 ]);
 export type DownstreamMessage = z.infer<typeof DownstreamMessageSchema>;
 
