@@ -670,11 +670,12 @@ export interface InheritedStatusLine {
 
 export function resolveInheritedStatusLine(opts: ResolveStatusLineOpts): InheritedStatusLine | null {
   const candidates: string[] = [
-    '/etc/claude/settings.json',                                  // enterprise
     join(opts.cwd,  '.claude/settings.local.json'),               // project (local)
     join(opts.cwd,  '.claude/settings.json'),                     // project
     join(opts.home, '.claude/settings.json'),                     // user
   ];
+  // Enterprise managed-settings (platform-specific paths) intentionally
+  // omitted — out of scope for v1. See spec "Deferred / future work".
   // Highest precedence first per CC's resolution order.
   for (const path of candidates) {
     if (opts.excludePath && path === opts.excludePath) continue;
@@ -873,7 +874,8 @@ export interface RelayDeps {
     SESSHIN_HUB_URL?: string;
     SESSHIN_SESSION_ID?: string;
     SESSHIN_USER_STATUSLINE_CMD?: string;
-    SESSHIN_USER_STATUSLINE_PADDING?: string;
+    // Note: SESSHIN_USER_STATUSLINE_PADDING was removed during final review —
+    // padding forwarding is deferred to a follow-up. See spec.
   };
   fetch: typeof globalThis.fetch;
   spawn: (
@@ -1206,7 +1208,9 @@ describe('buildClaudeChildEnv: user statusLine propagation', () => {
       inheritedStatusLine: { command: 'my-statusline', padding: 2 },
     });
     expect(env.SESSHIN_USER_STATUSLINE_CMD).toBe('my-statusline');
-    expect(env.SESSHIN_USER_STATUSLINE_PADDING).toBe('2');
+    // Note: padding forwarding was dropped during final review (deferred to a
+    // follow-up). The plan kept the test for reference; the actual claude.test.ts
+    // asserts SESSHIN_USER_STATUSLINE_PADDING is never set.
   });
   it('omits the env vars when no inherited command exists', () => {
     const env = buildClaudeChildEnv({
@@ -1216,7 +1220,6 @@ describe('buildClaudeChildEnv: user statusLine propagation', () => {
       inheritedStatusLine: null,
     });
     expect(env.SESSHIN_USER_STATUSLINE_CMD).toBeUndefined();
-    expect(env.SESSHIN_USER_STATUSLINE_PADDING).toBeUndefined();
   });
 });
 ```
@@ -1236,10 +1239,10 @@ In `claude.ts`, call `resolveInheritedStatusLine({ home: HOME, cwd: CWD, exclude
 ```ts
 if (inheritedStatusLine) {
   out.SESSHIN_USER_STATUSLINE_CMD = inheritedStatusLine.command;
-  if (inheritedStatusLine.padding !== undefined) {
-    out.SESSHIN_USER_STATUSLINE_PADDING = String(inheritedStatusLine.padding);
-  }
 }
+// Note: the original plan forwarded inheritedStatusLine.padding via
+// SESSHIN_USER_STATUSLINE_PADDING — that was removed during final review;
+// padding propagation is deferred to a follow-up.
 ```
 
 Make sure `tempSettingsPath` is the same path that `settings-tempfile.ts` writes — that is the file we exclude.

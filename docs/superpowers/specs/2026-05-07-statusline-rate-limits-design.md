@@ -1,7 +1,7 @@
 # Statusline-driven rate-limit readout
 
 **Date:** 2026-05-07
-**Status:** Design — pending implementation
+**Status:** Implemented (2026-05-07, PR #11)
 
 ## Problem
 
@@ -72,7 +72,7 @@ The settings-resolution step happens **once per session**, in the parent CLI pro
 | `cli/src/read-claude-settings.test.ts` | Extend with three new cases: only user has `statusLine`; user + project (project wins); injected temp file is excluded from the chain. |
 | `cli/src/settings-merge.ts` | When `SESSHIN_DISABLE_STATUSLINE_RELAY` is **unset** (default), merge in `{ statusLine: { type: 'command', command: '<abs-path-to-relay>' } }`. The absolute path is computed from the cli bin's location. |
 | `cli/src/settings-merge.test.ts` | Two new cases: opt-out env var skips injection; injection adds the statusline command without disturbing other merged keys. |
-| `cli/src/claude.ts` | Before launching Claude: call `resolveInheritedStatusLine`; if a command is found, set `SESSHIN_USER_STATUSLINE_CMD` and (if present) `SESSHIN_USER_STATUSLINE_PADDING` in the child env. |
+| `cli/src/claude.ts` | Before launching Claude: call `resolveInheritedStatusLine`; if a command is found, set `SESSHIN_USER_STATUSLINE_CMD` in the child env. (`padding` resolution is left in the helper's return type for future use; not forwarded in v1 — see "Deferred / future work".) |
 | `shared/src/protocol.ts` | Add `RateLimitWindowSchema`, `RateLimitsStateSchema`, `SessionRateLimitsSchema`. Export inferred types. |
 | `hub/src/rest/server.ts` | Register new route `POST /reports/rate-limits`. Body validated against `{ sessionId, five_hour: …\|null, seven_day: …\|null }`. On valid: stamp `observed_at = Date.now()`, store in registry slice, broadcast, return 204. On invalid: 400. |
 | `hub/src/rest/server.test.ts` | Cover: valid payload returns 204 + broadcast fires + state stored; invalid payload returns 400 with no broadcast; unknown sessionId returns 404 (the registry must already know about this session id). |
@@ -134,8 +134,7 @@ The handler stamps `observed_at = Date.now()` on receive, stores the resulting `
 |---|---|---|
 | `SESSHIN_HUB_URL` | injected by `cli/src/claude.ts` (already exists) | Hub base URL, default `http://127.0.0.1:9663`. |
 | `SESSHIN_SESSION_ID` | injected by `cli/src/claude.ts` (already exists) | Session id included in POST body. |
-| `SESSHIN_USER_STATUSLINE_CMD` | new, set by `cli/src/claude.ts` | Resolved original `statusLine.command` from the CC settings hierarchy, **walking enterprise → project → user** (i.e. CC's normal chain, but with our injected `--settings` temp file excluded since that layer is us). Empty string and unset are treated identically — both cause the relay to render its default. |
-| `SESSHIN_USER_STATUSLINE_PADDING` | new, optional | Forwarded if the user had a `padding` field. |
+| `SESSHIN_USER_STATUSLINE_CMD` | new, set by `cli/src/claude.ts` | Resolved original `statusLine.command` from the CC settings hierarchy, **walking project-local → project → user** (CC's normal chain minus our injected `--settings` temp file). Enterprise managed-settings (`/etc/claude-code/managed-settings.json` on Linux, `/Library/Application Support/ClaudeCode/...` on macOS) are out of scope for v1 — see "Deferred / future work". Empty string and unset are treated identically — both cause the relay to render its default. |
 
 ### Env var consumed by the CLI
 
@@ -186,7 +185,7 @@ All cases must fail toward "Claude Code TUI keeps working." The relay's exit mus
 | `rate_limits` field absent from CC's JSON | POST with `five_hour: null, seven_day: null` so the hub can distinguish "session has no quota data" from "session never reported". |
 | `rate_limits` partially present (only one window) | POST what we have; the other field is `null`. |
 | Relay binary crashes | CC briefly shows blank statusline area until next render; the parent CLI logs the crash via existing logger. |
-| User's enterprise-level `statusLine` exists | Honored — `resolveInheritedStatusLine` returns whichever the highest-precedence layer has, same precedence order CC itself uses. |
+| User's enterprise-level `statusLine` exists | **Not honored in v1.** `resolveInheritedStatusLine` walks project-local → project → user only; enterprise managed-settings paths are platform-specific and deferred. |
 
 ## UI behavior in `debug-web`
 
