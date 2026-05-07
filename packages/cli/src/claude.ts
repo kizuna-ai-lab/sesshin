@@ -1,11 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ensureHubRunning } from './hub-spawn.js';
 import { generateHooksOnlySettings } from './settings-tempfile.js';
-import { mergeUserHooksWithOurs } from './settings-merge.js';
+import { mergeUserHooksWithOurs, mergeSettings } from './settings-merge.js';
 import { wrapPty } from './pty-wrap.js';
 import { startPtyTap } from './pty-tap.js';
 import { startInjectListener } from './inject-listener.js';
@@ -13,10 +13,19 @@ import { startHeartbeat } from './heartbeat.js';
 import { installCleanup } from './cleanup.js';
 import { reapOrphanSettingsFiles } from './orphan-cleanup.js';
 import { sessionFilePath } from '@sesshin/hub/agents/claude/session-file-path';
-import { readClaudeSettings } from './read-claude-settings.js';
+import { readClaudeSettings, resolveInheritedStatusLine } from './read-claude-settings.js';
+import type { InheritedStatusLine } from './read-claude-settings.js';
 import { parsePermissionModeFlag } from './parse-permission-mode-flag.js';
 import { detectParentShell } from './detect-shell.js';
 import { startPauseMonitor } from './pause-monitor.js';
+
+// ── Relay bin path (computed once at module load) ─────────────────────────────
+// At runtime this module lives at <pkg>/dist/claude.js (or main.js). The relay
+// bin is a sibling of dist/ inside the same package: <pkg>/bin/sesshin-statusline-relay.
+// We use import.meta.url (the most reliable source) rather than process.argv[1]
+// (which points to the CLI entry, not necessarily this module).
+const _thisDir = dirname(fileURLToPath(import.meta.url));
+export const RELAY_BIN_PATH = join(_thisDir, '..', 'bin', 'sesshin-statusline-relay');
 
 const HUB_PORT = Number(process.env['SESSHIN_INTERNAL_PORT'] ?? 9663);
 const HUB_URL  = `http://127.0.0.1:${HUB_PORT}`;
@@ -41,6 +50,40 @@ function shellQuote(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
+// ── buildClaudeChildEnv ───────────────────────────────────────────────────────
+
+export interface BuildClaudeChildEnvParams {
+  /** Base env map to spread (typically process.env cast to Record<string,string>). */
+  base: Record<string, string | undefined>;
+  sessionId: string;
+  hubUrl: string;
+  /** The user's original statusLine command resolved before we injected ours, or null. */
+  inheritedStatusLine: InheritedStatusLine | null;
+}
+
+/**
+ * Builds the env vars map passed to the inner Claude child process.
+ * Always sets SESSHIN_SESSION_ID and SESSHIN_HUB_URL.
+ * When inheritedStatusLine is non-null, also sets SESSHIN_USER_STATUSLINE_CMD
+ * (and SESSHIN_USER_STATUSLINE_PADDING if padding is present).
+ */
+export function buildClaudeChildEnv(params: BuildClaudeChildEnvParams): Record<string, string> {
+  const out: Record<string, string> = {
+    ...Object.fromEntries(
+      Object.entries(params.base).filter((e): e is [string, string] => e[1] !== undefined)
+    ),
+    SESSHIN_SESSION_ID: params.sessionId,
+    SESSHIN_HUB_URL: params.hubUrl,
+  };
+  if (params.inheritedStatusLine) {
+    out.SESSHIN_USER_STATUSLINE_CMD = params.inheritedStatusLine.command;
+    if (params.inheritedStatusLine.padding !== undefined) {
+      out.SESSHIN_USER_STATUSLINE_PADDING = String(params.inheritedStatusLine.padding);
+    }
+  }
+  return out;
+}
+
 /** Shells whose `set` builtin understands `-m` (monitor mode / job control).
  * Excludes fish (`set` is a variable-only builtin with different flag space)
  * and csh/tcsh (separate syntax: `set notify`/`set monitor` style). Those
@@ -56,7 +99,8 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
   const hookBin = resolveBin('SESSHIN_HOOK_HANDLER_BIN', '@sesshin/hook-handler/bin/sesshin-hook-handler');
   await ensureHubRunning({ hubBin, port: HUB_PORT, healthTimeoutMs: 5000 });
 
-  // Compose hooks-only settings (with optional merge fallback when verification gate 1 = REPLACE)
+  // ── Compose temp settings file ───────────────────────────────────────────────
+  // Step 1: build base hooks-only settings, optionally merging user hooks.
   const useMerge = process.env['SESSHIN_MERGE_USER_HOOKS'] === '1';
   let settings: object = JSON.parse(generateHooksOnlySettings({ hookHandlerPath: hookBin, sessionId, hubUrl: HUB_URL, agent: 'claude-code' }));
   if (useMerge) {
@@ -65,6 +109,29 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
     settings = mergeUserHooksWithOurs(settings as { hooks: Record<string, unknown[]> }, userJson);
   }
   const tempSettingsPath = join(tmpdir(), `sesshin-${sessionId}.json`);
+
+  // Step 2: inject statusLine relay (unless disabled).
+  // tempSettingsPath is unique per sessionId and does not exist yet when we call
+  // resolveInheritedStatusLine. We still pass it as excludePath for correctness:
+  // if the same path somehow existed (e.g. filesystem collision), we'd skip it so
+  // we don't accidentally read our own injected relay path back as the user's value.
+  const disableRelay = process.env['SESSHIN_DISABLE_STATUSLINE_RELAY'] === '1';
+  let inheritedStatusLine: InheritedStatusLine | null = null;
+  if (!disableRelay) {
+    // Resolve user's original statusLine BEFORE writing our temp file.
+    inheritedStatusLine = resolveInheritedStatusLine({
+      home: homedir(),
+      cwd: process.cwd(),
+      excludePath: tempSettingsPath,
+    });
+    // Inject our relay as the active statusLine.
+    settings = mergeSettings({
+      base: settings as Record<string, unknown>,
+      relayBinPath: RELAY_BIN_PATH,
+      env: process.env as Record<string, string | undefined>,
+    });
+  }
+
   writeFileSync(tempSettingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 });
 
   // Register
@@ -100,11 +167,14 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
     ...extraArgs.map(shellQuote),
   ].join(' ');
   // Inject sesshin context so claude's Bash tool / slash commands can find us.
-  const childEnv: Record<string, string> = {
-    ...(process.env as Record<string, string>),
-    SESSHIN_SESSION_ID: sessionId,
-    SESSHIN_HUB_URL: HUB_URL,
-  };
+  // Also propagate the user's original statusLine command so the relay can
+  // delegate to it for the non-rate-limit portion of the status line.
+  const childEnv = buildClaudeChildEnv({
+    base: process.env as Record<string, string>,
+    sessionId,
+    hubUrl: HUB_URL,
+    inheritedStatusLine,
+  });
   const wrap = wrapPty({
     command: shell.bin,
     args: ['-i'], // interactive → bash/zsh/fish auto-enable job control
