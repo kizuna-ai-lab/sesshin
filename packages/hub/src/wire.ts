@@ -21,6 +21,7 @@ import { tailSessionFile } from './observers/session-file-tail.js';
 import { createRestServer, type RestServer, type RestServerDeps } from './rest/server.js';
 import { createWsServer, type WsServerInstance, type WsServerDeps } from './ws/server.js';
 import { reapStaleSessions } from './wire-liveness.js';
+import { readProcState } from './registry/proc-state.js';
 import { InputBridge } from './input-bridge.js';
 import { Summarizer } from './summarizer/index.js';
 import { runModeBPrime } from './summarizer/mode-b-prime.js';
@@ -463,6 +464,33 @@ export interface HubInstance {
 const SESSION_HEARTBEAT_TIMEOUT_MS = 120_000;
 const SESSION_REAP_INTERVAL_MS = 10_000;
 
+/**
+ * Reconcile each registered session's in-memory state against the OS view of
+ * its PID via /proc. Corrects drift (e.g. external `kill -CONT` resumed a
+ * session we still mark `paused`, or the process is gone but we missed the
+ * exit). Called once after startup restore and again at every reaper tick
+ * (before reapStaleSessions, so the reaper sees post-reconcile state).
+ */
+function reconcileProcState(reg: SessionRegistry): void {
+  for (const info of reg.list()) {
+    const rec = reg.get(info.id);
+    if (!rec || !rec.pid) continue;
+    const proc = readProcState(rec.pid);
+    if (proc === 'gone' || proc === 'dead') {
+      reg.unregister(info.id);
+      continue;
+    }
+    if (proc === 'stopped' && rec.state !== 'paused') {
+      reg.updateState(info.id, 'paused');
+    }
+    if (proc === 'running' && rec.state === 'paused') {
+      // External SIGCONT — fall back to 'idle' as a safe baseline; the
+      // wrapped CLI will heartbeat us into the right state shortly.
+      reg.updateState(info.id, 'idle');
+    }
+  }
+}
+
 export async function startHub(): Promise<HubInstance> {
   const registry = new SessionRegistry();
   const bus      = new EventBus();
@@ -506,7 +534,16 @@ export async function startHub(): Promise<HubInstance> {
     }
   }
 
+  // Reconcile registry state against OS proc state once after startup restore
+  // so any drift inherited from the SQLite snapshot (paused → resumed by an
+  // external SIGCONT, dead PIDs, etc.) is corrected before the reaper runs.
+  reconcileProcState(registry);
+
   const staleSweep = setInterval(() => {
+    // Reconcile BEFORE reapStaleSessions so the reaper's heartbeat-based
+    // sweep sees post-reconcile state (e.g. a session flipped to 'paused'
+    // here won't get reaped for missed heartbeats this tick).
+    reconcileProcState(registry);
     const removed = reapStaleSessions(registry, SESSION_HEARTBEAT_TIMEOUT_MS);
     for (const item of removed) {
       log.info({ sessionId: item.sessionId, reason: item.reason }, 'removed stale session');
