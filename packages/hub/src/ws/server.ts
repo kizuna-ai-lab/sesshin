@@ -9,6 +9,8 @@ import type { PtyTap } from '../observers/pty-tap.js';
 import type { ApprovalManager } from '../approval-manager.js';
 import type { HeadlessSnapshot } from '../observers/headless-term.js';
 import type { LifecycleHandler } from '../lifecycle/handler.js';
+import type { Db } from '../storage/db.js';
+import type { SessionMessageBroadcast } from '../synthesizer/messages.js';
 import { handleConnection, type BroadcastTarget } from './connection.js';
 
 export interface WsServerDeps {
@@ -29,6 +31,13 @@ export interface WsServerDeps {
    * When omitted, `session.lifecycle` is not handled (silently ignored).
    */
   lifecycle?: LifecycleHandler;
+  /**
+   * SQLite-backed catalog/messages store. Optional only to keep test fixtures
+   * terse — production callers (wire.ts) MUST pass this. Required for
+   * `history.request` and for `subscribe.includeEnded` to surface ended
+   * sessions in the initial `session.list`.
+   */
+  db?: Db;
   /** Called when a WS client sends an input.action or input.text. Wired in T38. */
   onInput?: (sessionId: string, data: string, source: string) => Promise<{ ok: boolean; reason?: string }>;
   /**
@@ -62,6 +71,19 @@ export interface WsServerInstance {
   close(): Promise<void>;
   address(): AddressInfo;
   broadcast(msg: object, filter?: (clientCaps: string[]) => boolean): void;
+  /**
+   * Push a `session.message` envelope to every connected client that has the
+   * `messages` capability AND is subscribed to the message's sessionId. Wired
+   * from the Synthesizer broadcast callback in wire.ts.
+   */
+  broadcastSessionMessage(msg: SessionMessageBroadcast): void;
+  /**
+   * Push a `session.ended` envelope to every connected client that has the
+   * `catalog` capability AND is subscribed to the session. Wired from
+   * lifecycle-kill (via LifecycleDeps.onEnd) and from the reaper (via
+   * registry 'session-removed' + persistor pendingMark) in wire.ts.
+   */
+  broadcastSessionEnded(msg: { type: 'session.ended'; sessionId: string; endedAt: number; endReason: 'normal' | 'interrupted' | 'killed' }): void;
   /** True iff ≥1 connected client has the `actions` capability AND is currently subscribed to this session. */
   hasSubscribedActionsClient(sessionId: string): boolean;
   /**
@@ -97,6 +119,8 @@ function capabilityRequiredFor(msgType: string): string | null {
     case 'session.added':
     case 'session.removed':
     case 'session.rate-limits':          return 'state';
+    case 'session.message':              return 'messages';
+    case 'session.ended':                return 'catalog';
     default:                             return null;
   }
 }
@@ -161,6 +185,24 @@ export function createWsServer(deps: WsServerDeps): WsServerInstance {
         if ((ws as unknown as { readyState: number }).readyState !== 1) continue;
         if (requiredCap && !target.caps().has(requiredCap)) continue;
         if (sessionId && !target.subscribed(sessionId)) continue;
+        ws.send(data);
+      }
+    },
+    broadcastSessionMessage: (msg) => {
+      const data = JSON.stringify(msg);
+      for (const [ws, target] of targets) {
+        if ((ws as unknown as { readyState: number }).readyState !== 1) continue;
+        if (!target.caps().has('messages')) continue;
+        if (!target.subscribed(msg.sessionId)) continue;
+        ws.send(data);
+      }
+    },
+    broadcastSessionEnded: (msg) => {
+      const data = JSON.stringify(msg);
+      for (const [ws, target] of targets) {
+        if ((ws as unknown as { readyState: number }).readyState !== 1) continue;
+        if (!target.caps().has('catalog')) continue;
+        if (!target.subscribed(msg.sessionId)) continue;
         ws.send(data);
       }
     },

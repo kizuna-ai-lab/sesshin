@@ -92,6 +92,11 @@ export class LifecycleHandler {
       }
     }, this.killTimeoutMs);
     t.unref?.();
+    // Order matters: persistor.markEnded must precede registry.unregister so
+    // any earlier 'session-removed' listener (in particular the wire.ts hook
+    // that broadcasts session.ended over WS) can read the pending mark via
+    // persistor.getPendingMark and surface endReason='killed' rather than
+    // the default 'normal'.
     this.deps.persistor.markEnded(rec.id, { endReason: 'killed', lastState: 'killed' });
     this.deps.registry.unregister(rec.id);
     return this.audit(msg, by, { ok: true });

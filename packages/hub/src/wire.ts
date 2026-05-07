@@ -500,6 +500,34 @@ export async function startHub(): Promise<HubInstance> {
   const dbPath = process.env['SESSHIN_STATE_DB'] ?? join(homedir(), '.sesshin', 'state.db');
   const db = openDb(dbPath);
   const persistor = new Persistor({ db, registry, debounceMs: 200 });
+  // Forward declaration so the registry 'session-removed' listener and the
+  // synthesizer (constructed below) can reach the WS server, which is only
+  // built after the REST server. Mirrors the wsRef pattern used elsewhere
+  // in this file for the same reason.
+  let wsRef: WsServerInstance | undefined;
+  // Register the 'session-removed' broadcaster BEFORE persistor.start() so
+  // this listener fires first and can read the pending end-mark via
+  // persistor.getPendingMark(id) before persistor.onRemoved consumes it. Order
+  // matters: Node EventEmitter dispatches in registration order, so swapping
+  // these two would yield endReason='normal' on every broadcast (the
+  // pendingMark would already have been written + cleared by the persistor).
+  //
+  // Both kill and reaper paths converge here:
+  //   - LifecycleHandler.doKill calls persistor.markEnded(id, {endReason:'killed'})
+  //     immediately before registry.unregister(id), so the mark is non-null
+  //     when this listener reads it → endReason='killed'.
+  //   - Reaper / proc-state-driven unregister has no preceding markEnded, so
+  //     getPendingMark returns null → fallback endReason='normal'.
+  registry.on('session-removed', (id: string) => {
+    const mark = persistor.getPendingMark(id);
+    const endReason = (mark?.endReason ?? 'normal') as 'normal' | 'interrupted' | 'killed';
+    wsRef?.broadcastSessionEnded({
+      type: 'session.ended',
+      sessionId: id,
+      endedAt: Date.now(),
+      endReason,
+    });
+  });
   persistor.start();
   const lifecycle = new LifecycleHandler({
     registry, db, persistor,
@@ -574,13 +602,16 @@ export async function startHub(): Promise<HubInstance> {
   wireStateMachine({ bus: dedupedBus, registry });
   wireJsonlModeTracker({ bus, registry });   // NB: use raw bus, not dedupedBus — agent-internal passes dedup but we don't care
 
-  // T16: Synthesizer folds user-prompt / Stop / PreCompact / PostCompact into
-  // chat-style MessageRows. The broadcast callback is a no-op for now; T18
-  // wires it to wsServer.broadcastSessionMessage(...).
+  // T16/T18: Synthesizer folds user-prompt / Stop / PreCompact / PostCompact
+  // into chat-style MessageRows. T18 wires the broadcast callback to push
+  // each persisted message to subscribed `messages`-cap clients via the WS
+  // server's broadcastSessionMessage helper. wsRef is captured by reference
+  // so the synthesizer (constructed before the WS server) sees it once the
+  // server is up.
   const synth = new Synthesizer({
     db,
     bus: dedupedBus,
-    broadcast: () => { /* T18 wires the WS broadcast */ },
+    broadcast: (m) => wsRef?.broadcastSessionMessage(m),
   });
   synth.start();
 
@@ -636,9 +667,10 @@ export async function startHub(): Promise<HubInstance> {
     defaultTimeoutMs: Number(process.env['SESSHIN_APPROVAL_TIMEOUT_MS'] ?? 60_000),
   });
 
-  // Forward declaration so adapters' getWs closure can reach the WS server,
-  // which is constructed AFTER the REST server (matches today's wsRef pattern).
-  let wsRef: WsServerInstance | undefined;
+  // wsRef is forward-declared near the top of startHub (alongside the
+  // LifecycleHandler that closes over it for onEnd → broadcastSessionEnded).
+  // The closure here uses the same reference so adapters can reach the WS
+  // server once it's constructed below.
   const adapters = createApprovalAdapters({
     registry, approvals, getWs: () => wsRef,
   });
@@ -707,7 +739,7 @@ export async function startHub(): Promise<HubInstance> {
     return terminal;
   };
   const ws = createWsServer({
-    registry, bus: dedupedBus, tap, staticDir, approvals, lifecycle,
+    registry, bus: dedupedBus, tap, staticDir, approvals, lifecycle, db,
     onInput: async (sessionId, data, source) => {
       const r = await bridge.deliver(sessionId, data, source);
       return { ok: r.ok, ...(r.reason !== undefined ? { reason: r.reason } : {}) };

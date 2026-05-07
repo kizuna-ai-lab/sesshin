@@ -1,9 +1,16 @@
 import type { WebSocket } from 'ws';
 import type { WsServerDeps } from './server.js';
-import { ClientIdentifySchema, UpstreamMessageSchema, PROTOCOL_VERSION } from '@sesshin/shared';
+import {
+  ClientIdentifySchema,
+  UpstreamMessageSchema,
+  PROTOCOL_VERSION,
+  SubstateSchema,
+  type SessionInfo,
+} from '@sesshin/shared';
 import { hostname } from 'node:os';
 import { canAcceptInput } from '../input-arbiter.js';
 import { actionToInput } from '../agents/claude/action-map.js';
+import type { SessionRow } from '../storage/db.js';
 
 export interface ConnectionState {
   ws: WebSocket;
@@ -157,6 +164,55 @@ function isSubscribed(state: ConnectionState, sessionId: string): boolean {
   return state.subscribedTo.has(sessionId);
 }
 
+/**
+ * Synthesize a SessionInfo-shaped object from an ended SessionRow so the
+ * WS client can deserialize it under the same SessionInfoSchema as live
+ * registry entries. The DB row carries enough to populate the required
+ * fields directly; substate is reconstructed by parsing whatever the
+ * persistor stashed under `metadata.substate` (or a baseline when missing,
+ * since SubstateSchema only auto-defaults a subset of fields).
+ *
+ * Kept inline (rather than exported next to db.ts) because it's only used
+ * here and depends on SubstateSchema's defaults, which is a shared concern.
+ */
+function rowToSessionInfoCompat(r: SessionRow): SessionInfo {
+  const meta = (r.metadata ?? {}) as {
+    substate?: Record<string, unknown>;
+    lastSummaryId?: string | null;
+    cols?: number | null;
+    rows?: number | null;
+  };
+  // Baseline mirrors SessionRegistry.defaultSubstate (the persistor source of
+  // truth); SubstateSchema.parse layers on the schema-defined defaults
+  // (permissionMode, compacting, cwd, paused). Any keys present in
+  // meta.substate (the snapshot at end-of-life) override the baseline.
+  const baseline = {
+    currentTool: null, lastTool: null, lastFileTouched: null, lastCommandRun: null,
+    elapsedSinceProgressMs: 0, tokensUsedTurn: null,
+    connectivity: 'ok' as const, stalled: false,
+  };
+  const substate = SubstateSchema.parse({ ...baseline, ...(meta.substate ?? {}) });
+  const info: SessionInfo = {
+    id: r.id,
+    name: r.name,
+    claudeSessionId: r.claudeSessionId,
+    agent: r.agent as SessionInfo['agent'],
+    cwd: r.cwd,
+    pid: r.pid ?? 0,
+    startedAt: r.startedAt,
+    state: r.lastState as SessionInfo['state'],
+    substate,
+    lastSummaryId: meta.lastSummaryId ?? null,
+    endedAt: r.endedAt,
+    endReason: r.endReason as SessionInfo['endReason'],
+    hidden: r.hidden,
+  };
+  if (r.sessionFilePath) info.sessionFilePath = r.sessionFilePath;
+  if (meta.cols) info.cols = meta.cols;
+  if (meta.rows) info.rows = meta.rows;
+  return info;
+}
+
 function handleUpstream(
   state: ConnectionState,
   msg: any,
@@ -196,7 +252,19 @@ function handleUpstream(
     if (state.subscribedTo === 'all') allSub.attachAllListener();
     else                              allSub.detachAllListener();
     if (state.capabilities.has('state')) {
-      state.ws.send(JSON.stringify({ type: 'session.list', sessions: deps.registry.list() }));
+      // includeEnded surfaces ended sessions from SQLite alongside the live
+      // registry. The combined list is what the client consumes as the
+      // initial snapshot — live entries first (preserve registry ordering),
+      // then ended rows synthesized from DB. Ignored without deps.db (test
+      // fixtures, or a hub started without persistence).
+      const live = deps.registry.list();
+      const ended = msg.includeEnded && deps.db
+        ? deps.db.sessions
+            .list({ includeEnded: true, includeHidden: false, limit: 50 })
+            .filter((r) => r.endedAt != null)
+            .map(rowToSessionInfoCompat)
+        : [];
+      state.ws.send(JSON.stringify({ type: 'session.list', sessions: [...live, ...ended] }));
       // Replay rate-limits for newly-subscribed sessions so clients that
       // subscribe after the last relay POST still get the current value.
       for (const sid of addedForReplay) {
@@ -305,6 +373,48 @@ function handleUpstream(
       state.terminalSubscriptions.delete(msg.sessionId);
     }
     deps.onTerminalUnsubscribe?.(msg.sessionId, (payload) => state.ws.send(JSON.stringify(payload)));
+    return;
+  }
+  if (msg.type === 'history.request') {
+    if (!state.capabilities.has('messages')) {
+      state.ws.send(JSON.stringify({
+        type: 'server.error',
+        code: 'capability.required',
+        message: 'messages',
+        requestId: msg.requestId,
+        sessionId: msg.sessionId,
+      }));
+      return;
+    }
+    if (!deps.db) {
+      state.ws.send(JSON.stringify({
+        type: 'server.error',
+        code: 'history.unavailable',
+        message: 'no db wired',
+        requestId: msg.requestId,
+        sessionId: msg.sessionId,
+      }));
+      return;
+    }
+    const rows = deps.db.messages.listBefore({
+      sessionId: msg.sessionId,
+      beforeId: msg.beforeId,
+      limit: msg.limit,
+    });
+    for (const r of rows) {
+      state.ws.send(JSON.stringify({
+        type: 'session.message',
+        sessionId: msg.sessionId,
+        message: {
+          id: r.id,
+          senderType: r.senderType,
+          content: r.content,
+          format: r.format,
+          requiresUserInput: r.requiresUserInput,
+          createdAt: r.createdAt,
+        },
+      }));
+    }
     return;
   }
   if (msg.type === 'session.lifecycle') {

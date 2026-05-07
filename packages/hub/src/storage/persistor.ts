@@ -49,6 +49,17 @@ export class Persistor {
     this.pendingMark.set(id, args);
   }
 
+  /**
+   * Read the pending end-mark for `id` without consuming it. Wire.ts uses this
+   * to surface the authoritative end reason when broadcasting `session.ended`
+   * on `'session-removed'` events. Returns null when no mark is pending
+   * (reaper-driven removals; the default `endReason: 'normal'` is what
+   * onRemoved will write).
+   */
+  getPendingMark(id: string): PendingMark | null {
+    return this.pendingMark.get(id) ?? null;
+  }
+
   private onAdded(id: string): void {
     const rec = this.opts.registry.get(id);
     if (!rec) return;
