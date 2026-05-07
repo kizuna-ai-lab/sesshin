@@ -78,6 +78,56 @@ describe('GET /api/sessions/:id', () => {
   });
 });
 
+describe('/api/sessions/:id/banner-debug', () => {
+  it('returns the diagnostic when inspectBanner is wired', async () => {
+    registry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const inspectBanner = (id: string): unknown => ({ sessionId: id, detectedMode: 'plan', viewportRows: [] });
+    const localSvr = createRestServer({ registry, inspectBanner });
+    await localSvr.listen(0, '127.0.0.1');
+    const localPort = localSvr.address().port;
+    try {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/banner-debug`);
+      expect(r.status).toBe(200);
+      const body = await r.json();
+      expect(body).toMatchObject({ sessionId: 's1', detectedMode: 'plan' });
+    } finally {
+      await localSvr.close();
+    }
+  });
+  it('returns 501 when inspectBanner is not wired', async () => {
+    registry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const r = await fetch(`http://127.0.0.1:${port}/api/sessions/s1/banner-debug`);
+    expect(r.status).toBe(501);
+  });
+  it('returns 404 with session-not-registered for unknown session', async () => {
+    const inspectBanner = (): unknown => ({});
+    const localSvr = createRestServer({ registry, inspectBanner });
+    await localSvr.listen(0, '127.0.0.1');
+    const localPort = localSvr.address().port;
+    try {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/missing/banner-debug`);
+      expect(r.status).toBe(404);
+      expect(await r.json()).toMatchObject({ error: 'session-not-registered' });
+    } finally {
+      await localSvr.close();
+    }
+  });
+  it('returns 409 with tracker-not-attached when session exists but inspector returns null', async () => {
+    registry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const inspectBanner = (_id: string): unknown => null;
+    const localSvr = createRestServer({ registry, inspectBanner });
+    await localSvr.listen(0, '127.0.0.1');
+    const localPort = localSvr.address().port;
+    try {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/banner-debug`);
+      expect(r.status).toBe(409);
+      expect(await r.json()).toMatchObject({ error: 'tracker-not-attached' });
+    } finally {
+      await localSvr.close();
+    }
+  });
+});
+
 describe('heartbeat', () => {
   it('POST /api/sessions/:id/heartbeat updates lastHeartbeat', async () => {
     const before = Date.now();

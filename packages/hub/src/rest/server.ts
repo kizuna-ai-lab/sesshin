@@ -61,6 +61,14 @@ export interface RestServerDeps {
    * forever even though the underlying approval has already been decided.
    */
   onApprovalsCleanedUp?: (sessionId: string, requestIds: string[]) => void;
+  /**
+   * Diagnostic hook for the PTY banner tracker — returns the headless
+   * terminal's current viewport content + per-anchor match positions so the
+   * web debug panel and curl users can inspect why detection picks (or
+   * doesn't pick) a given mode. Optional: `/banner-debug` returns 501 when
+   * unwired.
+   */
+  inspectBanner?: (sessionId: string) => unknown | null;
 }
 
 export interface RestServer {
@@ -214,6 +222,29 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     if (!parsed.success) return void res.writeHead(400).end();
     const ok = await deps.onInjectFromHub?.(id, parsed.data.data, parsed.data.source);
     return void res.writeHead(ok ? 204 : 502).end();
+  }
+  const bannerDebug = url.pathname.match(/^\/api\/sessions\/([^/]+)\/banner-debug$/);
+  if (bannerDebug) {
+    const id = bannerDebug[1]!;
+    if (method !== 'GET') return void res.writeHead(405).end();
+    if (!deps.registry.get(id)) {
+      return void res.writeHead(404, { 'content-type': 'application/json' })
+                     .end(JSON.stringify({ error: 'session-not-registered', sessionId: id }));
+    }
+    if (!deps.inspectBanner) {
+      return void res.writeHead(501, { 'content-type': 'application/json' })
+                     .end(JSON.stringify({ error: 'inspect-banner-not-wired' }));
+    }
+    const diag = deps.inspectBanner(id);
+    if (!diag) {
+      // Session is registered but the banner tracker has no record for it.
+      // Most likely the session pre-existed before the tracker wired up
+      // (legacy checkpoint) or the tracker has been stopped.
+      return void res.writeHead(409, { 'content-type': 'application/json' })
+                     .end(JSON.stringify({ error: 'tracker-not-attached', sessionId: id }));
+    }
+    return void res.writeHead(200, { 'content-type': 'application/json' })
+                   .end(JSON.stringify(diag));
   }
   const hb = url.pathname.match(/^\/api\/sessions\/([^/]+)\/heartbeat$/);
   if (hb) {

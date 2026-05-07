@@ -11,6 +11,7 @@ import { wireHookIngest } from './observers/hook-ingest.js';
 import type { HookEnvelope } from './agents/claude/normalize-hook.js';
 import { wireJsonlModeTracker } from './observers/jsonl-mode-tracker.js';
 import { wirePtyIdleWatcher, type IdleWatcherConfig } from './observers/pty-idle-watcher.js';
+import { wirePtyBannerTracker } from './observers/pty-banner-tracker.js';
 import { wireStateMachine } from './state-machine/applier.js';
 import { Dedup } from './observers/dedup.js';
 import { PtyTap } from './observers/pty-tap.js';
@@ -534,6 +535,14 @@ export async function startHub(): Promise<HubInstance> {
   if (process.env['SESSHIN_PTY_CONFIRM_MS'])       idleWatcherConfig.confirmMs       = Number(process.env['SESSHIN_PTY_CONFIRM_MS']);
   const ptyIdleWatcher = wirePtyIdleWatcher({ tap, registry, config: idleWatcherConfig });
 
+  // Permission-mode tracker: scrapes the cc TUI bottom-bar mode banner from
+  // the PTY stream. cc renders the banner as `<symbol> <title.toLowerCase()> on
+  // [(<shortcut> to cycle)]` (PromptInputFooterLeftSide.tsx:348-355). cc has
+  // no event/hook for pure Shift+Tab toggles, so the PTY scrape is the only
+  // path that catches idle mode cycles in real time. registry.setPermissionMode
+  // dedups, so re-evaluation per chunk is cheap.
+  const ptyBannerTracker = wirePtyBannerTracker({ tap, registry });
+
   // Hook ingest with sessionFilePath fixup. claude's SessionStart hook
   // delivers the real `transcript_path` (a UUID-named JSONL); the CLI
   // cannot know that path at register time, so it registers a placeholder
@@ -596,6 +605,7 @@ export async function startHub(): Promise<HubInstance> {
     onAttachSink:    (id, deliver) => { bridge.setSink(id, deliver); },
     onDetachSink:    (id) => { bridge.clearSink(id); },
     approvals,
+    inspectBanner:   (id) => ptyBannerTracker.inspectSession(id),
     hasSubscribedActionsClient: (sid) => wsRef?.hasSubscribedActionsClient(sid) ?? false,
     onWinsize: (sessionId, cols, rows) => {
       registry.setSessionWinsize(sessionId, cols, rows);
@@ -721,6 +731,7 @@ export async function startHub(): Promise<HubInstance> {
     shutdown: async () => {
       clearInterval(staleSweep);
       ptyIdleWatcher.stop();
+      ptyBannerTracker.stop();
       for (const off of terminalTaps.values()) off();
       terminalTaps.clear();
       for (const t of terminals.values()) t.dispose();

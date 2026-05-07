@@ -33,4 +33,42 @@ describe('wireHookIngest', () => {
     ingest({ agent: 'other', sessionId: 's2', ts: 1, event: 'Whatever', raw: {} });
     expect(events[0].kind).toBe('agent-internal');
   });
+
+  it('hook fallback: raw.permission_mode updates the registry mode', () => {
+    const bus = new EventBus();
+    const reg = new SessionRegistry();
+    reg.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/c', pid: 1, sessionFilePath: '/p' });
+    const ingest = wireHookIngest({ bus, registry: reg });
+    ingest({
+      agent: 'claude-code', sessionId: 's1', ts: 1, event: 'PreToolUse',
+      raw: { nativeEvent: 'PreToolUse', permission_mode: 'plan', tool_name: 'Read', tool_input: {} },
+    });
+    expect(reg.get('s1')!.substate.permissionMode).toBe('plan');
+  });
+
+  it('hook fallback ignores invalid permission_mode strings', () => {
+    const bus = new EventBus();
+    const reg = new SessionRegistry();
+    reg.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/c', pid: 1, sessionFilePath: '/p' });
+    const ingest = wireHookIngest({ bus, registry: reg });
+    ingest({
+      agent: 'claude-code', sessionId: 's1', ts: 1, event: 'PreToolUse',
+      raw: { nativeEvent: 'PreToolUse', permission_mode: 'bogus', tool_name: 'Read', tool_input: {} },
+    });
+    expect(reg.get('s1')!.substate.permissionMode).toBe('default');
+  });
+
+  it('hook fallback skips when permission_mode is missing (e.g. Notification hook)', () => {
+    const bus = new EventBus();
+    const reg = new SessionRegistry();
+    reg.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/c', pid: 1, sessionFilePath: '/p' });
+    reg.setPermissionMode('s1', 'auto');
+    const ingest = wireHookIngest({ bus, registry: reg });
+    ingest({
+      agent: 'claude-code', sessionId: 's1', ts: 1, event: 'Notification',
+      raw: { nativeEvent: 'Notification', message: 'hi' },
+    });
+    // Mode should be unchanged, not reset to default.
+    expect(reg.get('s1')!.substate.permissionMode).toBe('auto');
+  });
 });

@@ -11,6 +11,7 @@ import { PauseControls } from './PauseControls.js';
 import { CopyBtn } from './CopyBtn.js';
 import { RateLimitsPill } from './RateLimitsPill.js';
 import { TerminalView } from './TerminalView.js';
+import { BannerDebugPanel } from './BannerDebugPanel.js';
 import type { WsClient } from '../ws-client.js';
 
 export function SessionDetail({ ws }: { ws: WsClient }) {
@@ -74,6 +75,8 @@ export function SessionDetail({ ws }: { ws: WsClient }) {
       {tab === 'summary' && <SummaryCard summary={summaries[0] ?? null} />}
       {tab === 'events' && <EventTimeline events={events} />}
       {tab === 'terminal' && <TerminalView ws={ws} sessionId={s.id} />}
+
+      <BannerDebugPanel sessionId={s.id} />
     </div>
   );
 }
