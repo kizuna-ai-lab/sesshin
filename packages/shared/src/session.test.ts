@@ -17,17 +17,18 @@ describe('session schemas', () => {
       permissionMode: 'default',
       compacting: false,
       cwd: null,
+      paused: false,
     };
     expect(SubstateSchema.parse(s)).toEqual(s);
   });
-  it('Substate fills compacting/cwd defaults when missing (back-compat with old checkpoints)', () => {
+  it('Substate fills compacting/cwd/paused defaults when missing (back-compat with old checkpoints)', () => {
     const old = {
       currentTool: null, lastTool: null, lastFileTouched: null, lastCommandRun: null,
       elapsedSinceProgressMs: 0, tokensUsedTurn: null,
       connectivity: 'ok' as const, stalled: false,
       permissionMode: 'default' as const,
     };
-    expect(SubstateSchema.parse(old)).toMatchObject({ compacting: false, cwd: null });
+    expect(SubstateSchema.parse(old)).toMatchObject({ compacting: false, cwd: null, paused: false });
   });
   it('SessionInfo requires all fields', () => {
     expect(() => SessionInfoSchema.parse({ id: 'x' })).toThrow();
@@ -42,7 +43,7 @@ describe('SessionInfoSchema sticky config fields', () => {
       currentTool: null, lastTool: null, lastFileTouched: null,
       lastCommandRun: null, elapsedSinceProgressMs: 0, tokensUsedTurn: null,
       connectivity: 'ok' as const, stalled: false,
-      permissionMode: 'default' as const, compacting: false, cwd: null,
+      permissionMode: 'default' as const, compacting: false, cwd: null, paused: false,
     },
     lastSummaryId: null,
   };

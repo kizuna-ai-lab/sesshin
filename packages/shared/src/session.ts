@@ -34,6 +34,11 @@ export const SubstateSchema = z.object({
   // Updated when claude fires CwdChanged. Distinct from SessionInfo.cwd which
   // captures the cwd at register time and never changes after.
   cwd:                   z.string().nullable().default(null),
+  // True when the agent (claude) is suspended inside the inner shell that
+  // sesshin-cli spawned — i.e. the foreground process group of the PTY is
+  // the shell, not a job. Detected by polling /proc/<shellPid>/stat tpgid;
+  // reported by cli to hub via POST /api/sessions/:id/paused-state.
+  paused:                z.boolean().default(false),
 });
 export type Substate = z.infer<typeof SubstateSchema>;
 

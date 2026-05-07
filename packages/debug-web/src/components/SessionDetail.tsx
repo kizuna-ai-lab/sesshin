@@ -7,6 +7,7 @@ import { EventTimeline } from './EventTimeline.js';
 import { ActionButtons } from './ActionButtons.js';
 import { TextInput } from './TextInput.js';
 import { InteractionPanel } from './InteractionPanel.js';
+import { PauseControls } from './PauseControls.js';
 import { CopyBtn } from './CopyBtn.js';
 import { TerminalView } from './TerminalView.js';
 import type { WsClient } from '../ws-client.js';
@@ -54,9 +55,13 @@ export function SessionDetail({ ws }: { ws: WsClient }) {
           <CopyBtn text={s.sessionFilePath} label="copy path" />
         </div>
       )}
-      <InteractionPanel ws={ws} sessionId={s.id} />
+      <PauseControls ws={ws} sessionId={s.id} paused={s.substate.paused ?? false} />
+      {/* InteractionPanel stays disabled during pause: claude can't answer
+          its own pending prompts while suspended. The text input below stays
+          live so the user can drive the inner shell. */}
+      <InteractionPanel ws={ws} sessionId={s.id} disabled={s.substate.paused ?? false} />
       <ActionButtons ws={ws} sessionId={s.id} />
-      <TextInput ws={ws} sessionId={s.id} />
+      <TextInput ws={ws} sessionId={s.id} paused={s.substate.paused ?? false} />
 
       <div style={{ display: 'flex', gap: 8, margin: '16px 0 12px 0' }}>
         {tabButton('summary', 'Summary')}

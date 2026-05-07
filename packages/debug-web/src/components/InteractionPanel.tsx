@@ -8,7 +8,7 @@ function fmtRemaining(expiresAt: number): string {
   return `${Math.ceil(ms / 1000)}s`;
 }
 
-function Card({ ws, c }: { ws: WsClient; c: PendingPromptRequest }) {
+function Card({ ws, c, disabled }: { ws: WsClient; c: PendingPromptRequest; disabled: boolean }) {
   const [selected, setSelected] = useState<Record<number, Set<string>>>({});
   const [freeText, setFreeText] = useState<Record<number, string>>({});
   // 1Hz tick to keep `fallback in Ns` live. Bumping this state triggers a
@@ -30,6 +30,7 @@ function Card({ ws, c }: { ws: WsClient; c: PendingPromptRequest }) {
   };
 
   function canSubmit(): boolean {
+    if (disabled) return false;
     for (let i = 0; i < c.questions.length; i += 1) {
       const q = c.questions[i]!;
       const hasSelection = (selected[i]?.size ?? 0) > 0;
@@ -42,6 +43,7 @@ function Card({ ws, c }: { ws: WsClient; c: PendingPromptRequest }) {
 
   // Single-select shortcut: clicking an option picks it AND submits immediately
   const clickOption = (qIdx: number, key: string, multiSelect: boolean) => {
+    if (disabled) return;
     if (multiSelect) {
       const cur = new Set(selected[qIdx] ?? []);
       if (cur.has(key)) cur.delete(key); else cur.add(key);
@@ -80,13 +82,15 @@ function Card({ ws, c }: { ws: WsClient; c: PendingPromptRequest }) {
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {q.options.map((o) => (
               <button key={o.key} data-testid={`opt-${o.key}`}
+                      disabled={disabled}
                       onClick={() => clickOption(qIdx, o.key, q.multiSelect)}
                       title={o.description}
                       style={{
                         padding: '4px 12px',
                         background: (selected[qIdx]?.has(o.key)) ? '#2f5f2f' : '#222',
-                        color: '#eee', border: '1px solid #444',
+                        color: disabled ? '#666' : '#eee', border: '1px solid #444',
                         fontWeight: o.recommended ? 600 : 400,
+                        cursor: disabled ? 'not-allowed' : 'pointer',
                       }}>
                 {o.label}{o.recommended ? ' ★' : ''}
               </button>
@@ -120,12 +124,18 @@ function Card({ ws, c }: { ws: WsClient; c: PendingPromptRequest }) {
   );
 }
 
-export function InteractionPanel({ ws, sessionId }: { ws: WsClient; sessionId: string }) {
+export interface InteractionPanelProps {
+  ws: WsClient;
+  sessionId: string;
+  disabled?: boolean;
+}
+
+export function InteractionPanel({ ws, sessionId, disabled = false }: InteractionPanelProps) {
   const list = promptRequestsBySession.value[sessionId] ?? [];
   if (list.length === 0) return null;
   return (
     <div data-testid="interaction-panel" style={{ marginBottom: 12 }}>
-      {list.map(c => <Card key={c.requestId} ws={ws} c={c} />)}
+      {list.map(c => <Card key={c.requestId} ws={ws} c={c} disabled={disabled} />)}
     </div>
   );
 }

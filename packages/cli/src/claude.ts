@@ -15,6 +15,8 @@ import { reapOrphanSettingsFiles } from './orphan-cleanup.js';
 import { sessionFilePath } from '@sesshin/hub/agents/claude/session-file-path';
 import { readClaudeSettings } from './read-claude-settings.js';
 import { parsePermissionModeFlag } from './parse-permission-mode-flag.js';
+import { detectParentShell } from './detect-shell.js';
+import { startPauseMonitor } from './pause-monitor.js';
 
 const HUB_PORT = Number(process.env['SESSHIN_INTERNAL_PORT'] ?? 9663);
 const HUB_URL  = `http://127.0.0.1:${HUB_PORT}`;
@@ -33,6 +35,18 @@ function resolveBin(envName: string, packageBinName: string): string {
   } catch { /* fallthrough */ }
   return packageBinName.split('/').pop()!;
 }
+
+/** Single-quote a string for safe injection into a POSIX shell command line. */
+function shellQuote(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+/** Shells whose `set` builtin understands `-m` (monitor mode / job control).
+ * Excludes fish (`set` is a variable-only builtin with different flag space)
+ * and csh/tcsh (separate syntax: `set notify`/`set monitor` style). Those
+ * shells either enable job control automatically in `-i` (fish) or are rare
+ * enough that we'd rather skip than error to stderr. */
+const POSIX_SET_M_SHELLS = new Set(['bash', 'zsh', 'sh', 'dash', 'ksh', 'mksh', 'busybox']);
 
 export async function runClaude(extraArgs: string[]): Promise<void> {
   reapOrphanSettingsFiles();
@@ -74,34 +88,76 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
 
   const stopHeartbeat = startHeartbeat({ hubUrl: HUB_URL, sessionId });
 
-  // Spawn claude under PTY with --settings pointing at our temp file.
-  const claudeArgs = ['--settings', tempSettingsPath, ...extraArgs];
-  // Inject sesshin context into the spawned claude's env so its Bash tool
-  // (and any /sesshin-* slash command) can resolve $SESSHIN_SESSION_ID.
+  // ── Spawn the user's CURRENT shell (zsh/bash/fish/...) interactively under
+  //    a PTY. Inside that shell we'll launch claude as a foreground job, so
+  //    Ctrl+Z / fg are handled by the shell's native job control. The cli
+  //    process itself becomes a thin tty bridge + signal forwarder.
+  const shell = detectParentShell();
+  const claudeBin = process.env['SESSHIN_CLAUDE_BIN'] ?? 'claude';
+  const claudeCmd = [
+    shellQuote(claudeBin),
+    '--settings', shellQuote(tempSettingsPath),
+    ...extraArgs.map(shellQuote),
+  ].join(' ');
+  // Inject sesshin context so claude's Bash tool / slash commands can find us.
   const childEnv: Record<string, string> = {
     ...(process.env as Record<string, string>),
     SESSHIN_SESSION_ID: sessionId,
     SESSHIN_HUB_URL: HUB_URL,
   };
   const wrap = wrapPty({
-    command: process.env['SESSHIN_CLAUDE_BIN'] ?? 'claude',
-    args: claudeArgs,
+    command: shell.bin,
+    args: ['-i'], // interactive → bash/zsh/fish auto-enable job control
     cwd,
     env: childEnv,
     cols: process.stdout.columns ?? 80,
     rows: process.stdout.rows ?? 24,
-    passthrough: true,
   });
 
+  // Tee PTY output to local stdout AND to hub (pty-tap).
+  // process.stdout.write surfaces EPIPE asynchronously via the 'error' event
+  // when the parent pipe closes (e2e harness exiting, terminal closed). The
+  // listener is what actually catches it; a sync try/catch around .write
+  // can't see async I/O errors anyway.
+  process.stdout.on('error', () => { /* parent gone — drop subsequent writes */ });
+  wrap.onData((d) => process.stdout.write(d));
   const tap = startPtyTap({ hubUrl: HUB_URL, sessionId });
   wrap.onData((d) => tap.writeChunk(d));
 
+  // ── Forward outer-tty signals as control bytes into the PTY ──────────────
+  // The outer tty (user's real terminal) has ISIG enabled, so Ctrl+Z / Ctrl+C
+  // get converted by the kernel into SIGTSTP / SIGINT delivered to cli (the
+  // foreground process group). We DON'T want cli to stop / exit — it's the
+  // bridge; if it dies, hub heartbeat / pty-tap / inject-listener all die.
+  // Instead, install JS handlers (which suppress Node's default kernel action)
+  // and forward the corresponding control byte to the PTY master, where the
+  // slave's own ISIG will signal the inner foreground (claude or the shell).
+  const installSignalForwarder = (sig: NodeJS.Signals, ch: string): void => {
+    process.on(sig, () => { try { wrap.write(ch); } catch {} });
+  };
+  installSignalForwarder('SIGTSTP', '\x1a'); // Ctrl+Z → suspend inner job
+  installSignalForwarder('SIGINT',  '\x03'); // Ctrl+C → interrupt inner job
+  installSignalForwarder('SIGQUIT', '\x1c'); // Ctrl+\ → quit inner job (rare)
+
+  // ── Local tty raw passthrough ────────────────────────────────────────────
+  // setEncoding('utf-8') routes stdin chunks through Node's StringDecoder,
+  // which buffers partial multi-byte UTF-8 sequences across chunk boundaries.
+  // Without it, a single Buffer.toString('utf-8') on a chunk that ends mid-
+  // codepoint (paste of CJK / emoji / accented chars) would produce a
+  // replacement character (U+FFFD) and corrupt the user's input.
+  if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  process.stdin.setEncoding('utf-8');
+  process.stdin.resume();
+  process.stdin.on('data', (d: string) => wrap.write(d));
+
+  // ── Web → PTY input injection ────────────────────────────────────────────
   const inject = startInjectListener({
     hubUrl: HUB_URL,
     sessionId,
     onInput: (data, _src) => wrap.write(data),
   });
 
+  // ── Window-size forwarding ───────────────────────────────────────────────
   const onResize = (): void => {
     const cols = process.stdout.columns ?? 80;
     const rows = process.stdout.rows ?? 24;
@@ -115,25 +171,66 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
   process.stdout.on('resize', onResize);
   onResize();
 
+  // ── Paused-state monitor ─────────────────────────────────────────────────
+  // Polls /proc/<shellPid>/stat tpgid; flips paused=true when the inner
+  // shell holds foreground (claude suspended), paused=false when a job
+  // (claude) holds foreground. Reports to hub for substate.paused broadcast
+  // → debug-web banner.
+  const pauseMonitor = startPauseMonitor({
+    shellPid: wrap.pid,
+    onChange: (paused) => {
+      void fetch(`${HUB_URL}/api/sessions/${sessionId}/paused-state`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ paused }),
+      }).catch(() => {});
+    },
+  });
 
-  // Shutdown is triggered by:
-  //   (a) signal (SIGINT/SIGTERM) — via installCleanup's signal handlers
-  //   (b) claude exiting naturally (`exit` / Ctrl+D) — via wrap.onExit
-  // Both paths must hit DELETE /api/sessions/:id, otherwise the hub
-  // accumulates stale "done"-state sessions in its registry. Share one
-  // idempotent function across both paths.
+  // ── Kick off the inner claude command ────────────────────────────────────
+  // The shell will print its own PS1 first; that single-line flicker is
+  // acceptable v1 cost. `set -m` explicitly enables monitor mode (job
+  // control) — bash and zsh enable it automatically in interactive mode,
+  // but dash/sh do NOT, which would mean Ctrl+Z gets sent to the shell's
+  // pgrp instead of being routed to a separate foreground job. fish and
+  // csh/tcsh use different syntax (fish enables job control automatically
+  // in -i, csh has its own builtins) and would error on `set -m`, so we
+  // whitelist only the POSIX-sh-compatible shells. Append `; exit` so the
+  // inner shell auto-terminates when claude finishes — closing the PTY,
+  // firing wrap.onExit, and tearing sesshin down.
+  //
+  // The `printf '\x1b[2J\x1b[H'` clears the screen + homes the cursor right
+  // before claude runs, hiding the brief PS1 + echoed-command flash that
+  // would otherwise be visible while the inner shell processes our line.
+  const setMonitor = POSIX_SET_M_SHELLS.has(shell.name) ? 'set -m; ' : '';
+  wrap.write(`${setMonitor}printf '\\x1b[2J\\x1b[H'; ${claudeCmd}; exit\n`);
+
+  // ── Shutdown ─────────────────────────────────────────────────────────────
+  // Triggered by:
+  //   (a) inner shell exits (user typed `exit` / closed terminal) — wrap.onExit
+  //   (b) SIGTERM / SIGHUP — installCleanup
+  // SIGINT is intentionally NOT a shutdown trigger here: it's forwarded into
+  // the PTY as Ctrl+C so the running inner program (claude / shell builtin)
+  // sees it.
   let didShutdown = false;
   const shutdown = async (): Promise<void> => {
     if (didShutdown) return;
     didShutdown = true;
+    pauseMonitor.stop();
     stopHeartbeat();
+    if (process.stdin.isTTY) process.stdin.setRawMode(false);
+    process.stdin.pause();
     process.stdout.off('resize', onResize);
     tap.close();
     inject.close();
     try { await fetch(`${HUB_URL}/api/sessions/${sessionId}`, { method: 'DELETE' }); } catch {}
   };
 
-  installCleanup({ tempSettingsPath, onShutdown: shutdown });
+  installCleanup({
+    tempSettingsPath,
+    onShutdown: shutdown,
+    signals: ['SIGTERM', 'SIGHUP'],
+  });
 
   wrap.onExit(async (code) => {
     await shutdown();
