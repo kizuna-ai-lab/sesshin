@@ -8,6 +8,7 @@ import type { EventBus } from '../event-bus.js';
 import type { PtyTap } from '../observers/pty-tap.js';
 import type { ApprovalManager } from '../approval-manager.js';
 import type { HeadlessSnapshot } from '../observers/headless-term.js';
+import type { LifecycleHandler } from '../lifecycle/handler.js';
 import { handleConnection, type BroadcastTarget } from './connection.js';
 
 export interface WsServerDeps {
@@ -22,6 +23,12 @@ export interface WsServerDeps {
    * Omitting it silently disables subscribe-time replay (issue #5 fix).
    */
   approvals?: ApprovalManager;
+  /**
+   * Lifecycle handler for `session.lifecycle` upstream messages. Optional only
+   * to keep test fixtures terse — production callers (wire.ts) MUST pass this.
+   * When omitted, `session.lifecycle` is not handled (silently ignored).
+   */
+  lifecycle?: LifecycleHandler;
   /** Called when a WS client sends an input.action or input.text. Wired in T38. */
   onInput?: (sessionId: string, data: string, source: string) => Promise<{ ok: boolean; reason?: string }>;
   /**

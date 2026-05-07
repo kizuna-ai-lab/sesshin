@@ -29,6 +29,7 @@ import { runModeB } from './summarizer/mode-b.js';
 import { wireSummarizerTrigger } from './summarizer-trigger.js';
 import { ApprovalManager } from './approval-manager.js';
 import type { ApprovalOutcome } from './approval-manager.js';
+import { LifecycleHandler } from './lifecycle/handler.js';
 import { getHandler, setCatchAllToolName } from './agents/claude/tool-handlers/registry.js';
 import type { ToolHandler, HandlerCtx } from './agents/claude/tool-handlers/types.js';
 import type { PermissionUpdate } from '@sesshin/shared';
@@ -499,6 +500,12 @@ export async function startHub(): Promise<HubInstance> {
   const db = openDb(dbPath);
   const persistor = new Persistor({ db, registry, debounceMs: 200 });
   persistor.start();
+  const lifecycle = new LifecycleHandler({
+    registry, db, persistor,
+    sendSignal: (pid, sig) => {
+      try { process.kill(pid, sig); return true; } catch { return false; }
+    },
+  });
   const dedup    = new Dedup({ windowMs: 2000 });
   const bridge   = new InputBridge();
 
@@ -643,7 +650,7 @@ export async function startHub(): Promise<HubInstance> {
 
   // REST server
   const rest = createRestServer({
-    registry, tap, onHookEvent,
+    registry, tap, onHookEvent, lifecycle,
     onInjectFromHub: (id, data, source) => bridge.deliver(id, data, source).then((r) => r.ok),
     onAttachSink:    (id, deliver) => { bridge.setSink(id, deliver); },
     onDetachSink:    (id) => { bridge.clearSink(id); },
@@ -689,7 +696,7 @@ export async function startHub(): Promise<HubInstance> {
     return terminal;
   };
   const ws = createWsServer({
-    registry, bus: dedupedBus, tap, staticDir, approvals,
+    registry, bus: dedupedBus, tap, staticDir, approvals, lifecycle,
     onInput: async (sessionId, data, source) => {
       const r = await bridge.deliver(sessionId, data, source);
       return { ok: r.ok, ...(r.reason !== undefined ? { reason: r.reason } : {}) };

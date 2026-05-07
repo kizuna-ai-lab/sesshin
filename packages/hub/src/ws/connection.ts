@@ -307,6 +307,39 @@ function handleUpstream(
     deps.onTerminalUnsubscribe?.(msg.sessionId, (payload) => state.ws.send(JSON.stringify(payload)));
     return;
   }
+  if (msg.type === 'session.lifecycle') {
+    if (!state.capabilities.has('lifecycle')) {
+      state.ws.send(JSON.stringify({
+        type: 'server.error',
+        code: 'capability.required',
+        message: 'lifecycle',
+        requestId: msg.requestId,
+        sessionId: msg.sessionId,
+      }));
+      return;
+    }
+    if (!deps.lifecycle) {
+      state.ws.send(JSON.stringify({
+        type: 'server.error',
+        code: 'lifecycle.not-wired',
+        message: 'lifecycle handler not configured',
+        requestId: msg.requestId,
+        sessionId: msg.sessionId,
+      }));
+      return;
+    }
+    const result = deps.lifecycle.handle(msg, state.kind ?? 'unknown');
+    if (!result.ok) {
+      state.ws.send(JSON.stringify({
+        type: 'server.error',
+        code: result.code ?? 'lifecycle.unknown',
+        message: result.message,
+        sessionId: result.sessionId,
+        requestId: result.requestId,
+      }));
+    }
+    return;
+  }
   if (msg.type === 'input.action' || msg.type === 'input.text') {
     const session = deps.registry.get(msg.sessionId);
     if (!session) {

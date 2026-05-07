@@ -1,8 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createRestServer, type RestServer } from './server.js';
 import { SessionRegistry } from '../registry/session-registry.js';
 import { PtyTap } from '../observers/pty-tap.js';
 import { request as httpRequest } from 'node:http';
+import { openDb } from '../storage/db.js';
+import { Persistor } from '../storage/persistor.js';
+import { LifecycleHandler } from '../lifecycle/handler.js';
 
 let svr: RestServer;
 let port: number;
@@ -173,6 +179,117 @@ describe('POST /reports/rate-limits', () => {
       expect(reports[0].state.five_hour).toEqual({ used_percentage: 45, resets_at: 100 });
       expect(reports[0].state.seven_day).toBeNull();
       expect(typeof reports[0].state.observed_at).toBe('number');
+    } finally { await server.close(); }
+  });
+});
+
+describe('POST /api/sessions/:id/lifecycle', () => {
+  it('returns 200 with { ok: true } on successful rename', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sesshin-rest-lc-'));
+    const db = openDb(join(dir, 'state.db'));
+    const registry = new SessionRegistry();
+    const persistor = new Persistor({ db, registry, debounceMs: 5 });
+    persistor.start();
+    registry.register({ id: 's1', name: 'old', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const lifecycle = new LifecycleHandler({
+      registry, db, persistor,
+      sendSignal: () => true,
+    });
+    const server = createRestServer({ registry, lifecycle });
+    await server.listen(0, '127.0.0.1');
+    const localPort = server.address().port;
+    try {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/lifecycle`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'rename', payload: { name: 'new' } }),
+      });
+      expect(r.status).toBe(200);
+      expect(await r.json()).toEqual({ ok: true });
+      expect(registry.get('s1')!.name).toBe('new');
+      expect(db.sessions.get('s1')!.name).toBe('new');
+      const audits = db.actions.list({ sessionId: 's1', limit: 10 });
+      expect(audits.find((a) => a.kind === 'rename')!.performedBy).toBe('cli-local');
+    } finally {
+      await server.close();
+      persistor.stop();
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns 409 with code on rejection (delete from idle)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sesshin-rest-lc-'));
+    const db = openDb(join(dir, 'state.db'));
+    const registry = new SessionRegistry();
+    const persistor = new Persistor({ db, registry, debounceMs: 5 });
+    persistor.start();
+    registry.register({ id: 's2', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    registry.updateState('s2', 'idle');  // delete only valid in done/interrupted/killed
+    const lifecycle = new LifecycleHandler({
+      registry, db, persistor,
+      sendSignal: () => true,
+    });
+    const server = createRestServer({ registry, lifecycle });
+    await server.listen(0, '127.0.0.1');
+    const localPort = server.address().port;
+    try {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/s2/lifecycle`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'delete' }),
+      });
+      expect(r.status).toBe(409);
+      const body = await r.json() as { ok: boolean; code?: string };
+      expect(body.ok).toBe(false);
+      expect(body.code).toBe('lifecycle.invalid-state');
+    } finally {
+      await server.close();
+      persistor.stop();
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns 400 on malformed body', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sesshin-rest-lc-'));
+    const db = openDb(join(dir, 'state.db'));
+    const registry = new SessionRegistry();
+    const persistor = new Persistor({ db, registry, debounceMs: 5 });
+    persistor.start();
+    const lifecycle = new LifecycleHandler({
+      registry, db, persistor,
+      sendSignal: () => true,
+    });
+    const server = createRestServer({ registry, lifecycle });
+    await server.listen(0, '127.0.0.1');
+    const localPort = server.address().port;
+    try {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/s2/lifecycle`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'bogus' }),
+      });
+      expect(r.status).toBe(400);
+    } finally {
+      await server.close();
+      persistor.stop();
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns 501 when lifecycle handler is not wired', async () => {
+    const server = createRestServer({ registry: new SessionRegistry() });
+    await server.listen(0, '127.0.0.1');
+    const localPort = server.address().port;
+    try {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/anything/lifecycle`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'pause' }),
+      });
+      expect(r.status).toBe(501);
     } finally { await server.close(); }
   });
 });

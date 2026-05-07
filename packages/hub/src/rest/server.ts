@@ -5,6 +5,7 @@ import { PermissionModeEnum, fingerprintToolInput, type PermissionRequestDecisio
 import type { SessionRegistry } from '../registry/session-registry.js';
 import type { PtyTap } from '../observers/pty-tap.js';
 import type { ApprovalManager } from '../approval-manager.js';
+import type { LifecycleHandler } from '../lifecycle/handler.js';
 import type { ClientInfo, HistoryEntry } from './diagnostics.js';
 import { handlePermissionRoute } from './permission.js';
 
@@ -35,6 +36,12 @@ export interface RestServerDeps {
   }) => Promise<PermissionRequestDecision | null>;
   /** Approval manager for diagnostics endpoint (T9). When omitted, /api/diagnostics returns 503. */
   approvals?: ApprovalManager;
+  /**
+   * Lifecycle handler for `POST /api/sessions/:id/lifecycle` passthrough (used
+   * by CLI subcommands `sesshin pause/resume/kill/rename`). When omitted, the
+   * route returns 501.
+   */
+  lifecycle?: LifecycleHandler;
   /** True iff there's a connected actions-capable client subscribed to this session. */
   hasSubscribedActionsClient?: (sessionId: string) => boolean;
   /** List currently-connected clients (filter to one session, or `null` for all). */
@@ -97,6 +104,12 @@ const RateLimitReportBody = z.object({
   sessionId: z.string(),
   five_hour: RateLimitsStateSchema.shape.five_hour,
   seven_day: RateLimitsStateSchema.shape.seven_day,
+});
+
+const LifecycleBody = z.object({
+  action:    z.enum(['pause','resume','kill','rename','delete']),
+  payload:   z.object({ name: z.string().min(1) }).optional(),
+  requestId: z.string().optional(),
 });
 
 const HookBody = z.object({
@@ -244,6 +257,33 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     }
     return void res.writeHead(200, { 'content-type': 'application/json' })
                    .end(JSON.stringify(diag));
+  }
+  const lc = url.pathname.match(/^\/api\/sessions\/([^/]+)\/lifecycle$/);
+  if (lc) {
+    const id = lc[1]!;
+    if (method !== 'POST') return void res.writeHead(405).end();
+    if (!deps.lifecycle) return void res.writeHead(501, { 'content-type': 'application/json' })
+                                 .end(JSON.stringify({ error: 'lifecycle-not-wired' }));
+    let body: unknown;
+    try { body = await readJson(req); } catch { return void res.writeHead(400).end('bad json'); }
+    const parsed = LifecycleBody.safeParse(body);
+    if (!parsed.success) return void res.writeHead(400, { 'content-type': 'application/json' })
+                                 .end(JSON.stringify({ error: parsed.error.format() }));
+    const requestId = parsed.data.requestId ?? `rest-${Date.now()}`;
+    const msg = {
+      type: 'session.lifecycle' as const,
+      requestId,
+      sessionId: id,
+      action: parsed.data.action,
+      ...(parsed.data.payload ? { payload: parsed.data.payload } : {}),
+    };
+    const result = deps.lifecycle.handle(msg, 'cli-local');
+    const status = result.ok ? 200 : 409;
+    const responseBody: Record<string, unknown> = { ok: result.ok };
+    if (result.code) responseBody['code'] = result.code;
+    if (result.message) responseBody['message'] = result.message;
+    return void res.writeHead(status, { 'content-type': 'application/json' })
+                   .end(JSON.stringify(responseBody));
   }
   const hb = url.pathname.match(/^\/api\/sessions\/([^/]+)\/heartbeat$/);
   if (hb) {
