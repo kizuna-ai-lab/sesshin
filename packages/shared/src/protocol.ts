@@ -276,6 +276,7 @@ export const DownstreamMessageSchema = z.discriminatedUnion('type', [
   TerminalResizeSchema, TerminalEndedSchema, ServerErrorSchema, ServerPingSchema,
   SessionPromptRequestSchema, SessionPromptRequestResolvedSchema,
   SessionConfigChangedSchema, SessionChildChangedSchema,
+  SessionRateLimitsSchema,
 ]);
 export type DownstreamMessage = z.infer<typeof DownstreamMessageSchema>;
 
