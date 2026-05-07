@@ -105,6 +105,78 @@ describe('/api/sessions/:id/paused-state', () => {
   });
 });
 
+describe('POST /reports/rate-limits', () => {
+  it('returns 404 when sessionId is unknown', async () => {
+    const reports: any[] = [];
+    const server = createRestServer({
+      registry: new SessionRegistry(),
+      onRateLimitReport: (env) => { reports.push(env); },
+    });
+    await server.listen(0, '127.0.0.1');
+    const localPort = server.address().port;
+    try {
+      const r = await fetch(`http://127.0.0.1:${localPort}/reports/rate-limits`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: 'missing', five_hour: null, seven_day: null }),
+      });
+      expect(r.status).toBe(404);
+      expect(reports).toEqual([]);
+    } finally { await server.close(); }
+  });
+
+  it('returns 400 on a malformed body', async () => {
+    const reports: any[] = [];
+    const registry = new SessionRegistry();
+    registry.register({ id: 's1', name: 'a', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const server = createRestServer({
+      registry,
+      onRateLimitReport: (env) => { reports.push(env); },
+    });
+    await server.listen(0, '127.0.0.1');
+    const localPort = server.address().port;
+    try {
+      const r = await fetch(`http://127.0.0.1:${localPort}/reports/rate-limits`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: 's1', five_hour: 'not-an-object', seven_day: null }),
+      });
+      expect(r.status).toBe(400);
+      expect(reports).toEqual([]);
+    } finally { await server.close(); }
+  });
+
+  it('returns 204 + invokes onRateLimitReport on a valid body', async () => {
+    const reports: any[] = [];
+    const registry = new SessionRegistry();
+    registry.register({ id: 's1', name: 'a', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const server = createRestServer({
+      registry,
+      onRateLimitReport: (env) => { reports.push(env); },
+    });
+    await server.listen(0, '127.0.0.1');
+    const localPort = server.address().port;
+    try {
+      const body = {
+        sessionId: 's1',
+        five_hour: { used_percentage: 45, resets_at: 100 },
+        seven_day: null,
+      };
+      const r = await fetch(`http://127.0.0.1:${localPort}/reports/rate-limits`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(r.status).toBe(204);
+      expect(reports).toHaveLength(1);
+      expect(reports[0].sessionId).toBe('s1');
+      expect(reports[0].state.five_hour).toEqual({ used_percentage: 45, resets_at: 100 });
+      expect(reports[0].state.seven_day).toBeNull();
+      expect(typeof reports[0].state.observed_at).toBe('number');
+    } finally { await server.close(); }
+  });
+});
+
 describe('shutdown', () => {
   it('close() resolves promptly even with active long-poll connections', async () => {
     // Regression: graceful shutdown previously hung forever when long-lived

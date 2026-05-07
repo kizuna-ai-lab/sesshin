@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { z } from 'zod';
-import { PermissionModeEnum, fingerprintToolInput, type PermissionRequestDecision } from '@sesshin/shared';
+import { PermissionModeEnum, fingerprintToolInput, type PermissionRequestDecision, RateLimitsStateSchema, type RateLimitsState } from '@sesshin/shared';
 import type { SessionRegistry } from '../registry/session-registry.js';
 import type { PtyTap } from '../observers/pty-tap.js';
 import type { ApprovalManager } from '../approval-manager.js';
@@ -50,6 +50,8 @@ export interface RestServerDeps {
    * paused=false means a job (claude) holds foreground.
    */
   onPausedReport?: (sessionId: string, paused: boolean) => void;
+  /** Fired when a rate-limit report arrives via POST /reports/rate-limits. */
+  onRateLimitReport?: (env: { sessionId: string; state: RateLimitsState }) => void;
   /**
    * Called from the stale-cleanup path when a tool-completion event
    * (PostToolUse / PostToolUseFailure / Stop) successfully resolves one or
@@ -83,6 +85,12 @@ const WinsizeBody = z.object({ cols: z.number().int().positive(), rows: z.number
 const PausedReportBody = z.object({ paused: z.boolean() });
 
 const InjectBody = z.object({ data: z.string(), source: z.string() });
+
+const RateLimitReportBody = z.object({
+  sessionId: z.string(),
+  five_hour: RateLimitsStateSchema.shape.five_hour,
+  seven_day: RateLimitsStateSchema.shape.seven_day,
+});
 
 const HookBody = z.object({
   agent:     z.enum(['claude-code','codex','gemini','other']),
@@ -223,6 +231,25 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     }
     if (method === 'DELETE') return unregisterSession(id, res, deps);
     return void res.writeHead(405).end();
+  }
+
+  if (url.pathname === '/reports/rate-limits') {
+    if (method !== 'POST') return void res.writeHead(405).end();
+    let body: unknown;
+    try { body = await readJson(req); } catch { return void res.writeHead(400).end('bad json'); }
+    const parsed = RateLimitReportBody.safeParse(body);
+    if (!parsed.success) {
+      return void res.writeHead(400, { 'content-type': 'application/json' })
+        .end(JSON.stringify({ error: 'invalid body', issues: parsed.error.issues }));
+    }
+    if (!deps.registry.get(parsed.data.sessionId)) return void res.writeHead(404).end();
+    const state: RateLimitsState = {
+      five_hour:   parsed.data.five_hour,
+      seven_day:   parsed.data.seven_day,
+      observed_at: Date.now(),
+    };
+    deps.onRateLimitReport?.({ sessionId: parsed.data.sessionId, state });
+    return void res.writeHead(204).end();
   }
 
   if (url.pathname === '/hooks') {
