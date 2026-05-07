@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const SessionStateEnum = z.enum([
   'starting', 'idle', 'running',
   'awaiting-input', 'awaiting-confirmation',
-  'error', 'done', 'interrupted'
+  'error', 'paused', 'done', 'interrupted', 'killed'
 ]);
 export type SessionState = z.infer<typeof SessionStateEnum>;
 

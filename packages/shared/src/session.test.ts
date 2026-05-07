@@ -3,11 +3,10 @@ import { SessionInfoSchema, SessionStateEnum, SubstateSchema } from './session.j
 import { ActionEnum } from './actions.js';
 
 describe('session schemas', () => {
-  it('SessionStateEnum accepts the 8 documented states', () => {
-    for (const s of ['starting','idle','running','awaiting-input','awaiting-confirmation','error','done','interrupted']) {
+  it('SessionStateEnum accepts the 10 documented states', () => {
+    for (const s of ['starting','idle','running','awaiting-input','awaiting-confirmation','error','paused','done','interrupted','killed']) {
       expect(SessionStateEnum.parse(s)).toBe(s);
     }
-    expect(() => SessionStateEnum.parse('paused')).toThrow();
   });
   it('Substate roundtrips', () => {
     const s = {
