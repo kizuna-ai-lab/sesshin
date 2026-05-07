@@ -10,7 +10,8 @@ describe('buildClaudeChildEnv: user statusLine propagation', () => {
       inheritedStatusLine: { command: 'my-statusline', padding: 2 },
     });
     expect(env.SESSHIN_USER_STATUSLINE_CMD).toBe('my-statusline');
-    expect(env.SESSHIN_USER_STATUSLINE_PADDING).toBe('2');
+    // SESSHIN_USER_STATUSLINE_PADDING is intentionally not forwarded (out of scope for v1)
+    expect(env.SESSHIN_USER_STATUSLINE_PADDING).toBeUndefined();
   });
 
   it('omits the env vars when no inherited command exists', () => {
@@ -24,15 +25,22 @@ describe('buildClaudeChildEnv: user statusLine propagation', () => {
     expect(env.SESSHIN_USER_STATUSLINE_PADDING).toBeUndefined();
   });
 
-  it('omits padding env var when inheritedStatusLine has no padding', () => {
-    const env = buildClaudeChildEnv({
+  it('never sets SESSHIN_USER_STATUSLINE_PADDING regardless of input padding', () => {
+    // padding is preserved in InheritedStatusLine shape but not forwarded via env
+    const withoutPadding = buildClaudeChildEnv({
       base: {},
       sessionId: 's1',
       hubUrl: 'http://127.0.0.1:9663',
       inheritedStatusLine: { command: 'just-cmd' },
     });
-    expect(env.SESSHIN_USER_STATUSLINE_CMD).toBe('just-cmd');
-    expect(env.SESSHIN_USER_STATUSLINE_PADDING).toBeUndefined();
+    expect(withoutPadding.SESSHIN_USER_STATUSLINE_PADDING).toBeUndefined();
+    const withPadding = buildClaudeChildEnv({
+      base: {},
+      sessionId: 's1',
+      hubUrl: 'http://127.0.0.1:9663',
+      inheritedStatusLine: { command: 'just-cmd', padding: 4 },
+    });
+    expect(withPadding.SESSHIN_USER_STATUSLINE_PADDING).toBeUndefined();
   });
 
   it('always sets SESSHIN_SESSION_ID and SESSHIN_HUB_URL', () => {

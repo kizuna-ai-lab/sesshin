@@ -64,8 +64,9 @@ export interface BuildClaudeChildEnvParams {
 /**
  * Builds the env vars map passed to the inner Claude child process.
  * Always sets SESSHIN_SESSION_ID and SESSHIN_HUB_URL.
- * When inheritedStatusLine is non-null, also sets SESSHIN_USER_STATUSLINE_CMD
- * (and SESSHIN_USER_STATUSLINE_PADDING if padding is present).
+ * When inheritedStatusLine is non-null, also sets SESSHIN_USER_STATUSLINE_CMD.
+ * Note: InheritedStatusLine.padding is not forwarded via env — forwarding
+ * padding is out of scope for v1.
  */
 export function buildClaudeChildEnv(params: BuildClaudeChildEnvParams): Record<string, string> {
   const out: Record<string, string> = {
@@ -77,9 +78,6 @@ export function buildClaudeChildEnv(params: BuildClaudeChildEnvParams): Record<s
   };
   if (params.inheritedStatusLine) {
     out.SESSHIN_USER_STATUSLINE_CMD = params.inheritedStatusLine.command;
-    if (params.inheritedStatusLine.padding !== undefined) {
-      out.SESSHIN_USER_STATUSLINE_PADDING = String(params.inheritedStatusLine.padding);
-    }
   }
   return out;
 }

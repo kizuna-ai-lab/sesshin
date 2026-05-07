@@ -6,7 +6,6 @@ export interface RelayDeps {
     SESSHIN_HUB_URL?: string;
     SESSHIN_SESSION_ID?: string;
     SESSHIN_USER_STATUSLINE_CMD?: string;
-    SESSHIN_USER_STATUSLINE_PADDING?: string;
   };
   fetch: typeof globalThis.fetch;
   spawn: (
