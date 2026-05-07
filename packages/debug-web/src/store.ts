@@ -1,6 +1,6 @@
 // packages/debug-web/src/store.ts
 import { signal, computed } from '@preact/signals';
-import type { SessionInfo, Summary, Event } from '@sesshin/shared';
+import type { SessionInfo, Summary, Event, RateLimitsState } from '@sesshin/shared';
 
 export interface PendingPromptRequest {
   sessionId: string;
@@ -24,6 +24,7 @@ export const selectedSessionId = signal<string | null>(null);
 export const summariesBySession = signal<Record<string, Summary[]>>({});
 export const eventsBySession = signal<Record<string, Event[]>>({});
 export const promptRequestsBySession = signal<Record<string, PendingPromptRequest[]>>({});
+export const rateLimitsBySession = signal<Record<string, RateLimitsState>>({});
 export const connected = signal<boolean>(false);
 export const lastEventId = signal<string | null>(null);
 
@@ -53,6 +54,11 @@ export function removeSession(id: string): void {
   deleteSessionKey(summariesBySession, id);
   deleteSessionKey(eventsBySession, id);
   deleteSessionKey(promptRequestsBySession, id);
+  deleteSessionKey(rateLimitsBySession, id);
+}
+
+export function applyRateLimits(sessionId: string, state: RateLimitsState): void {
+  rateLimitsBySession.value = { ...rateLimitsBySession.value, [sessionId]: state };
 }
 
 export function applyConfigChanged(sessionId: string, config: {

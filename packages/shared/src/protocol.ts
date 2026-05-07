@@ -252,6 +252,23 @@ export const SessionChildChangedSchema = z.object({
   reason:                  z.enum(['startup','clear','resume','session-end','unknown']),
 });
 
+export const RateLimitWindowSchema = z.object({
+  used_percentage: z.number(),
+  resets_at:       z.number().int(),  // Unix seconds (matches CC's source)
+});
+
+export const RateLimitsStateSchema = z.object({
+  five_hour:    RateLimitWindowSchema.nullable(),
+  seven_day:    RateLimitWindowSchema.nullable(),
+  observed_at:  z.number().int(),     // Unix milliseconds (hub-stamped via Date.now())
+});
+
+export const SessionRateLimitsSchema = z.object({
+  type:        z.literal('session.rate-limits'),
+  sessionId:   z.string(),
+  rateLimits:  RateLimitsStateSchema,
+});
+
 export const DownstreamMessageSchema = z.discriminatedUnion('type', [
   ServerHelloSchema, SessionListSchema, SessionAddedSchema, SessionRemovedSchema,
   SessionStateMsgSchema, SessionEventMsgSchema, SessionSummaryMsgSchema,
@@ -259,6 +276,7 @@ export const DownstreamMessageSchema = z.discriminatedUnion('type', [
   TerminalResizeSchema, TerminalEndedSchema, ServerErrorSchema, ServerPingSchema,
   SessionPromptRequestSchema, SessionPromptRequestResolvedSchema,
   SessionConfigChangedSchema, SessionChildChangedSchema,
+  SessionRateLimitsSchema,
 ]);
 export type DownstreamMessage = z.infer<typeof DownstreamMessageSchema>;
 
@@ -270,3 +288,6 @@ export type PromptResponse               = z.infer<typeof PromptResponseSchema>;
 export type PromptResponseAnswer         = z.infer<typeof PromptResponseSchema>['answers'][number];
 export type PromptQuestion               = z.infer<typeof PromptQuestionSchema>;
 export type PromptOption                 = z.infer<typeof PromptOptionSchema>;
+export type RateLimitWindow              = z.infer<typeof RateLimitWindowSchema>;
+export type RateLimitsState              = z.infer<typeof RateLimitsStateSchema>;
+export type SessionRateLimits            = z.infer<typeof SessionRateLimitsSchema>;

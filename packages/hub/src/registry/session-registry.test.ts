@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import type { RateLimitsState } from '@sesshin/shared';
 import { SessionRegistry } from './session-registry.js';
 
 function makeReg() { return new SessionRegistry(); }
@@ -111,6 +112,7 @@ describe('SessionRegistry — publicView surfaces sessionFilePath', () => {
     expect('claudeAllowRules' in view).toBe(false);
     expect('lastHeartbeat' in view).toBe(false);
     expect('fileTailCursor' in view).toBe(false);
+    expect('rateLimits' in view).toBe(false);
     // pin, quietUntil, sessionGateOverride are now surfaced in publicView:
     expect('pin' in view).toBe(true);
     expect('quietUntil' in view).toBe(true);
@@ -295,5 +297,30 @@ describe('resetChildScopedState', () => {
   it('no-op on unknown session', () => {
     const r = new SessionRegistry();
     expect(() => r.resetChildScopedState('unknown')).not.toThrow();
+  });
+});
+
+describe('rateLimits', () => {
+  it('returns null before any setRateLimits call', () => {
+    const reg = new SessionRegistry();
+    reg.register({ id: 's1', name: 'a', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    expect(reg.getRateLimits('s1')).toBeNull();
+  });
+
+  it('round-trips a state via setRateLimits / getRateLimits', () => {
+    const reg = new SessionRegistry();
+    reg.register({ id: 's1', name: 'a', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const state: RateLimitsState = {
+      five_hour: { used_percentage: 45, resets_at: 100 },
+      seven_day: null,
+      observed_at: 999,
+    };
+    reg.setRateLimits('s1', state);
+    expect(reg.getRateLimits('s1')).toEqual(state);
+  });
+
+  it('setRateLimits on unknown session is a no-op (returns false)', () => {
+    const reg = new SessionRegistry();
+    expect(reg.setRateLimits('missing', { five_hour: null, seven_day: null, observed_at: 1 })).toBe(false);
   });
 });

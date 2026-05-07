@@ -209,6 +209,18 @@ function handleUpstream(
     else                              allSub.detachAllListener();
     if (state.capabilities.has('state')) {
       state.ws.send(JSON.stringify({ type: 'session.list', sessions: deps.registry.list() }));
+      // Replay rate-limits for newly-subscribed sessions so clients that
+      // subscribe after the last relay POST still get the current value.
+      for (const sid of addedForReplay) {
+        const rl = deps.registry.getRateLimits(sid);
+        if (rl) {
+          state.ws.send(JSON.stringify({
+            type: 'session.rate-limits',
+            sessionId: sid,
+            rateLimits: rl,
+          }));
+        }
+      }
     }
     // Replay current pending prompt-requests for newly-added sessions.
     // Only sessions that just appeared in the subscription set (addedForReplay)

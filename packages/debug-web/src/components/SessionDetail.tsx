@@ -9,6 +9,7 @@ import { TextInput } from './TextInput.js';
 import { InteractionPanel } from './InteractionPanel.js';
 import { PauseControls } from './PauseControls.js';
 import { CopyBtn } from './CopyBtn.js';
+import { RateLimitsPill } from './RateLimitsPill.js';
 import { TerminalView } from './TerminalView.js';
 import type { WsClient } from '../ws-client.js';
 
@@ -40,6 +41,7 @@ export function SessionDetail({ ws }: { ws: WsClient }) {
         <h2 style={{ margin: 0 }}>{s.name}</h2>
         <StateBadge state={s.state} />
         <ModeBadge mode={s.substate.permissionMode} />
+        <RateLimitsPill sessionId={s.id} />
       </div>
       <div data-testid="session-id-row"
            style={{ display: 'flex', alignItems: 'center', marginBottom: 4, fontSize: 12, opacity: 0.75 }}>

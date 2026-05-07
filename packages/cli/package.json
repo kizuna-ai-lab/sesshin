@@ -3,7 +3,10 @@
   "version": "0.0.0",
   "type": "module",
   "private": true,
-  "bin": { "sesshin": "bin/sesshin" },
+  "bin": {
+    "sesshin": "bin/sesshin",
+    "sesshin-statusline-relay": "bin/sesshin-statusline-relay"
+  },
   "scripts": {
     "build": "tsup && mkdir -p dist/commands-bundle && cp -r src/commands-bundle/*.md dist/commands-bundle/",
     "dev": "tsup --watch",

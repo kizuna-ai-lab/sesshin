@@ -4,7 +4,8 @@ import {
   UpstreamMessageSchema, DownstreamMessageSchema,
   SessionListSchema, ServerErrorSchema, PROTOCOL_VERSION,
   SessionPromptRequestResolvedSchema, SessionConfigChangedSchema,
-  SessionChildChangedSchema,
+  SessionChildChangedSchema, RateLimitWindowSchema, RateLimitsStateSchema,
+  SessionRateLimitsSchema,
 } from './protocol.js';
 
 describe('protocol upstream', () => {
@@ -225,5 +226,51 @@ describe('SessionChildChangedSchema', () => {
       reason: 'startup',
     });
     expect(r.type).toBe('session.child-changed');
+  });
+});
+
+describe('RateLimitWindowSchema', () => {
+  it('parses a well-formed window', () => {
+    const r = RateLimitWindowSchema.parse({ used_percentage: 45.2, resets_at: 1714867200 });
+    expect(r).toEqual({ used_percentage: 45.2, resets_at: 1714867200 });
+  });
+  it('rejects when fields are missing', () => {
+    expect(() => RateLimitWindowSchema.parse({ used_percentage: 1 })).toThrow();
+  });
+});
+
+describe('RateLimitsStateSchema', () => {
+  it('parses null windows (API-key user)', () => {
+    const r = RateLimitsStateSchema.parse({ five_hour: null, seven_day: null, observed_at: 1 });
+    expect(r.five_hour).toBeNull();
+    expect(r.seven_day).toBeNull();
+  });
+  it('parses both windows present', () => {
+    const r = RateLimitsStateSchema.parse({
+      five_hour: { used_percentage: 45, resets_at: 100 },
+      seven_day: { used_percentage: 23, resets_at: 200 },
+      observed_at: 999,
+    });
+    expect(r.five_hour?.used_percentage).toBe(45);
+    expect(r.observed_at).toBe(999);
+  });
+});
+
+describe('SessionRateLimitsSchema', () => {
+  it('parses a valid broadcast envelope', () => {
+    const m = SessionRateLimitsSchema.parse({
+      type: 'session.rate-limits',
+      sessionId: 's1',
+      rateLimits: { five_hour: null, seven_day: null, observed_at: 1 },
+    });
+    expect(m.type).toBe('session.rate-limits');
+    expect(m.sessionId).toBe('s1');
+  });
+  it('rejects wrong type literal', () => {
+    expect(() => SessionRateLimitsSchema.parse({
+      type: 'session.something-else',
+      sessionId: 's1',
+      rateLimits: { five_hour: null, seven_day: null, observed_at: 1 },
+    })).toThrow();
   });
 });

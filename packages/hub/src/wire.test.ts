@@ -560,3 +560,106 @@ describe('child Claude session boundary (Phase B4)', () => {
     expect(innerCalls.length).toBe(1);
   });
 });
+
+// -----------------------------------------------------------------------------
+// rate-limit report wiring
+//
+// These tests build their own isolated REST + WS pair so they can inject the
+// onRateLimitReport callback that wire.ts's startHub() wires in production.
+// The outer beforeEach's shared servers are not used here.
+// -----------------------------------------------------------------------------
+
+describe('rate-limit report wiring', () => {
+  let rlRegistry: SessionRegistry;
+  let rlWs: WsServerInstance;
+  let rlRest: RestServer;
+  let rlRestPort: number;
+  let rlBroadcasts: object[];
+
+  beforeEach(async () => {
+    rlRegistry = new SessionRegistry();
+    let wsRef: WsServerInstance | undefined;
+
+    rlWs = createWsServer({
+      registry: rlRegistry,
+      bus:       new EventBus(),
+      tap:       new PtyTap({ ringBytes: 1024 }),
+      staticDir: null,
+      approvals: new ApprovalManager({ defaultTimeoutMs: 1000 }),
+      onInput:   async () => ({ ok: true }),
+    });
+
+    rlBroadcasts = [];
+    const realBroadcast = rlWs.broadcast.bind(rlWs);
+    rlWs.broadcast = (msg: object, filter?: (caps: string[]) => boolean): void => {
+      rlBroadcasts.push(msg);
+      realBroadcast(msg, filter);
+    };
+    wsRef = rlWs;
+
+    rlRest = createRestServer({
+      registry: rlRegistry,
+      approvals: new ApprovalManager({ defaultTimeoutMs: 1000 }),
+      onRateLimitReport: ({ sessionId, state }) => {
+        if (!rlRegistry.setRateLimits(sessionId, state)) return;
+        wsRef?.broadcast({
+          type: 'session.rate-limits',
+          sessionId,
+          rateLimits: state,
+        });
+      },
+    });
+
+    await rlRest.listen(0, '127.0.0.1');
+    await rlWs.listen(0, '127.0.0.1');
+    rlRestPort = rlRest.address().port;
+  });
+
+  afterEach(async () => {
+    await rlRest.close();
+    await rlWs.close();
+  });
+
+  it('stores in registry and broadcasts session.rate-limits', async () => {
+    const sid = randomUUID();
+    rlRegistry.register({
+      id: sid, name: 'n', agent: 'claude-code', cwd: '/x', pid: 1,
+      sessionFilePath: '/x/session.jsonl',
+    });
+
+    const r = await fetch(`http://127.0.0.1:${rlRestPort}/reports/rate-limits`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: sid, five_hour: null, seven_day: null }),
+    });
+    expect(r.status).toBe(204);
+
+    // Registry must have stored the rate limits.
+    expect(rlRegistry.getRateLimits(sid)).toMatchObject({ five_hour: null, seven_day: null });
+
+    // Exactly one broadcast with the correct envelope.
+    const rateLimitBroadcasts = rlBroadcasts.filter(
+      (b) => (b as any).type === 'session.rate-limits',
+    );
+    expect(rateLimitBroadcasts).toHaveLength(1);
+    expect(rateLimitBroadcasts[0]).toMatchObject({
+      type: 'session.rate-limits',
+      sessionId: sid,
+      rateLimits: { five_hour: null, seven_day: null },
+    });
+  });
+
+  it('does not broadcast for an unknown sessionId (REST returns 404)', async () => {
+    const before = rlBroadcasts.length;
+    const r = await fetch(`http://127.0.0.1:${rlRestPort}/reports/rate-limits`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'no-such-session', five_hour: null, seven_day: null }),
+    });
+    // The REST layer returns 404 for unknown session — onRateLimitReport is never called.
+    expect(r.status).toBe(404);
+    expect(
+      rlBroadcasts.slice(before).find((b) => (b as any).type === 'session.rate-limits'),
+    ).toBeUndefined();
+  });
+});

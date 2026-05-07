@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import type { PermissionMode, SessionInfo, SessionState, Substate } from '@sesshin/shared';
+import type { PermissionMode, RateLimitsState, SessionInfo, SessionState, Substate } from '@sesshin/shared';
 
 export interface RegisterInput {
   id: string;
@@ -40,6 +40,7 @@ export interface SessionRecord extends SessionInfo {
   sessionGateOverride: 'disabled' | 'auto' | 'always' | null;
   pin: string | null;
   quietUntil: number | null;
+  rateLimits: RateLimitsState | null;
 }
 
 export class SessionRegistry extends EventEmitter {
@@ -66,6 +67,7 @@ export class SessionRegistry extends EventEmitter {
       sessionGateOverride: null,
       pin: null,
       quietUntil: null,
+      rateLimits: null,
     };
     this.sessions.set(rec.id, rec);
     this.emit('session-added', this.publicView(rec));
@@ -230,11 +232,27 @@ export class SessionRegistry extends EventEmitter {
     return this.sessions.get(id)?.quietUntil ?? null;
   }
 
+  setRateLimits(id: string, state: RateLimitsState): boolean {
+    const s = this.sessions.get(id);
+    if (!s) return false;
+    s.rateLimits = state;
+    return true;
+  }
+
+  getRateLimits(id: string): RateLimitsState | null {
+    return this.sessions.get(id)?.rateLimits ?? null;
+  }
+
   private publicView(s: SessionRecord): SessionInfo {
     const {
       // Stripped fields (private to the hub):
       fileTailCursor: _c, lastHeartbeat: _h,
       claudeAllowRules: _a,
+      // rateLimits is broadcast on its own `session.rate-limits` channel
+      // (and replayed by the WS subscribe handler); keep it out of generic
+      // session events to avoid duplicating it through every state-changed
+      // / config-changed / session.list broadcast.
+      rateLimits: _rl,
       // Surfaced fields stay in `pub`:
       sessionFilePath,
       ...pub

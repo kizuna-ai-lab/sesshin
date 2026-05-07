@@ -424,3 +424,38 @@ describe('session.config-changed runtime broadcast', () => {
     client.close();
   });
 });
+
+describe('subscribe-time replay of rate-limits', () => {
+  it('replay includes session.rate-limits when state exists', async () => {
+    const sid = registerSession();
+    const rlState = { five_hour: null, seven_day: null, observed_at: 1746000000000 };
+    registry.setRateLimits(sid, rlState);
+
+    const client = await connectClient(['state']);
+    const frames = collectFrames(client);
+
+    client.send(JSON.stringify({ type: 'subscribe', sessions: [sid], since: null }));
+    await waitFor(() => frames.some((f) => f.type === 'session.rate-limits'));
+
+    const rl = frames.find((f) => f.type === 'session.rate-limits');
+    expect(rl).toBeDefined();
+    expect(rl.sessionId).toBe(sid);
+    expect(rl.rateLimits).toEqual(rlState);
+    client.close();
+  });
+
+  it('replay omits session.rate-limits when state is null', async () => {
+    const sid = registerSession();
+    // Do NOT call registry.setRateLimits — state remains null.
+
+    const client = await connectClient(['state']);
+    const frames = collectFrames(client);
+
+    client.send(JSON.stringify({ type: 'subscribe', sessions: [sid], since: null }));
+    await waitFor(() => frames.some((f) => f.type === 'session.list'));
+    await delay(100);  // give it time to NOT send anything
+
+    expect(frames.find((f) => f.type === 'session.rate-limits')).toBeUndefined();
+    client.close();
+  });
+});
