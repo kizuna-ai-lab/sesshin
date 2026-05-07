@@ -605,6 +605,14 @@ export async function startHub(): Promise<HubInstance> {
     onPausedReport: (sessionId, paused) => {
       registry.patchSubstate(sessionId, { paused });
     },
+    onRateLimitReport: ({ sessionId, state }) => {
+      if (!registry.setRateLimits(sessionId, state)) return;
+      wsRef?.broadcast({
+        type: 'session.rate-limits',
+        sessionId,
+        rateLimits: state,
+      });
+    },
     listClients: (sid) => wsRef?.listClients(sid) ?? [],
     ...adapters.restDeps,
   });
