@@ -89,7 +89,8 @@ function capabilityRequiredFor(msgType: string): string | null {
     case 'session.state':
     case 'session.list':
     case 'session.added':
-    case 'session.removed':              return 'state';
+    case 'session.removed':
+    case 'session.rate-limits':          return 'state';
     default:                             return null;
   }
 }
