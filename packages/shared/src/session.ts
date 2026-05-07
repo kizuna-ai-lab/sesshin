@@ -69,12 +69,8 @@ export const SessionInfoSchema = z.object({
   sessionFilePath: z.string().optional(),
   cols:             z.number().int().positive().optional(),
   rows:             z.number().int().positive().optional(),
-  // Sticky user-set session config. All three are nullable+optional:
-  // - missing: schema-level backwards compatibility for old payloads
-  // - null:    explicitly unset (default after register())
-  // - value:   user has set this via `sesshin pin/quiet/gate` etc.
-  pin:                 z.string().nullable().optional(),
-  quietUntil:          z.number().int().nullable().optional(),
-  sessionGateOverride: z.enum(['disabled','auto','always']).nullable().optional(),
+  endedAt:    z.number().int().nullable().optional(),
+  endReason:  z.enum(['normal','interrupted','killed']).nullable().optional(),
+  hidden:     z.boolean().optional(),
 });
 export type SessionInfo = z.infer<typeof SessionInfoSchema>;

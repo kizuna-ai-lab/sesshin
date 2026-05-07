@@ -242,14 +242,6 @@ export const SessionPromptRequestResolvedSchema = z.object({
 // changed (pin / quietUntil / sessionGateOverride). Carries the full
 // snapshot of all three rather than a delta — keeps client merge logic
 // trivial. Gated on `state` capability.
-export const SessionConfigChangedSchema = z.object({
-  type:                z.literal('session.config-changed'),
-  sessionId:           z.string(),
-  pin:                 z.string().nullable(),
-  quietUntil:          z.number().int().nullable(),
-  sessionGateOverride: z.enum(['disabled','auto','always']).nullable(),
-});
-
 // Server tells subscribers that the Claude child process bound to this
 // sesshin session crossed a session boundary — i.e. raw.session_id changed
 // (SessionStart for /clear, --resume, fresh startup) or the child's
@@ -327,7 +319,7 @@ export const DownstreamMessageSchema = z.discriminatedUnion('type', [
   SessionAttentionSchema, TerminalSnapshotSchema, TerminalDeltaSchema,
   TerminalResizeSchema, TerminalEndedSchema, ServerErrorSchema, ServerPingSchema,
   SessionPromptRequestSchema, SessionPromptRequestResolvedSchema,
-  SessionConfigChangedSchema, SessionChildChangedSchema,
+  SessionChildChangedSchema,
   SessionRateLimitsSchema,
   SessionMessageSchema, SessionEndedSchema,
 ]);
@@ -335,7 +327,6 @@ export type DownstreamMessage = z.infer<typeof DownstreamMessageSchema>;
 
 export type SessionPromptRequest         = z.infer<typeof SessionPromptRequestSchema>;
 export type SessionPromptRequestResolved = z.infer<typeof SessionPromptRequestResolvedSchema>;
-export type SessionConfigChanged         = z.infer<typeof SessionConfigChangedSchema>;
 export type SessionChildChanged          = z.infer<typeof SessionChildChangedSchema>;
 export type PromptResponse               = z.infer<typeof PromptResponseSchema>;
 export type PromptResponseAnswer         = z.infer<typeof PromptResponseSchema>['answers'][number];

@@ -3,7 +3,7 @@ import {
   ClientIdentifySchema, SubscribeSchema, InputActionSchema,
   UpstreamMessageSchema, DownstreamMessageSchema,
   SessionListSchema, ServerErrorSchema, PROTOCOL_VERSION,
-  SessionPromptRequestResolvedSchema, SessionConfigChangedSchema,
+  SessionPromptRequestResolvedSchema,
   SessionChildChangedSchema, RateLimitWindowSchema, RateLimitsStateSchema,
   SessionRateLimitsSchema,
   SessionLifecycleSchema, HistoryRequestSchema,
@@ -85,42 +85,6 @@ describe('SessionPromptRequestResolvedSchema additions', () => {
     });
     expect(r.reason).toBe('child-session-changed');
     expect(r.resolvedBy).toBeNull();
-  });
-});
-
-describe('SessionConfigChangedSchema', () => {
-  it('parses a snapshot with all-null fields', () => {
-    const r = SessionConfigChangedSchema.parse({
-      type: 'session.config-changed', sessionId: 's',
-      pin: null, quietUntil: null, sessionGateOverride: null,
-    });
-    expect(r.sessionId).toBe('s');
-    expect(r.pin).toBeNull();
-  });
-
-  it('parses a snapshot with all-set fields', () => {
-    const r = SessionConfigChangedSchema.parse({
-      type: 'session.config-changed', sessionId: 's',
-      pin: 'deploy', quietUntil: 123, sessionGateOverride: 'auto',
-    });
-    expect(r.pin).toBe('deploy');
-    expect(r.quietUntil).toBe(123);
-    expect(r.sessionGateOverride).toBe('auto');
-  });
-
-  it('routes through DownstreamMessageSchema discriminated union', () => {
-    const r = DownstreamMessageSchema.parse({
-      type: 'session.config-changed', sessionId: 's',
-      pin: null, quietUntil: null, sessionGateOverride: null,
-    });
-    expect(r.type).toBe('session.config-changed');
-  });
-
-  it('rejects partial snapshots (all three fields are required)', () => {
-    expect(() => SessionConfigChangedSchema.parse({
-      type: 'session.config-changed', sessionId: 's',
-      pin: 'x',  // missing quietUntil and sessionGateOverride
-    })).toThrow();
   });
 });
 
