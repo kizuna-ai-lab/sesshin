@@ -37,7 +37,7 @@ export const SubstateSchema = z.object({
   // True when the agent (claude) is suspended inside the inner shell that
   // sesshin-cli spawned — i.e. the foreground process group of the PTY is
   // the shell, not a job. Detected by polling /proc/<shellPid>/stat tpgid;
-  // reported by cli to hub via POST /api/sessions/:id/paused-state.
+  // reported by cli to hub via POST /api/v1/sessions/:id/paused-state.
   paused:                z.boolean().default(false),
 });
 export type Substate = z.infer<typeof SubstateSchema>;

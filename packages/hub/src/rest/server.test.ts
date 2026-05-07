@@ -19,19 +19,41 @@ beforeEach(async () => {
 });
 afterEach(async () => { await svr.close(); });
 
-describe('/api/health', () => {
+describe('/api/v1/health', () => {
   it('returns 200 with { ok: true } on GET', async () => {
-    const r = await fetch(`http://127.0.0.1:${port}/api/health`);
+    const r = await fetch(`http://127.0.0.1:${port}/api/v1/health`);
     expect(r.status).toBe(200);
     expect(await r.json()).toEqual({ ok: true });
   });
   it('returns 405 on non-GET', async () => {
-    const r = await fetch(`http://127.0.0.1:${port}/api/health`, { method: 'POST' });
+    const r = await fetch(`http://127.0.0.1:${port}/api/v1/health`, { method: 'POST' });
     expect(r.status).toBe(405);
   });
 });
 
-describe('/api/sessions/:id/raw — streaming', () => {
+describe('un-versioned /api/* → 410 Gone', () => {
+  it('returns 410 with `use /api/v1` body on /api/health', async () => {
+    const r = await fetch(`http://127.0.0.1:${port}/api/health`);
+    expect(r.status).toBe(410);
+    expect(await r.json()).toEqual({ error: 'use /api/v1' });
+  });
+  it('returns 410 on /api/sessions even for POST', async () => {
+    const r = await fetch(`http://127.0.0.1:${port}/api/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(r.status).toBe(410);
+  });
+  it('does not 410 the unversioned `/hooks` endpoint', async () => {
+    const r = await fetch(`http://127.0.0.1:${port}/hooks`, { method: 'GET' });
+    // Hooks is POST-only; a GET should hit 405 (route reached) — not 410.
+    expect(r.status).not.toBe(410);
+    expect(r.status).toBe(405);
+  });
+});
+
+describe('/api/v1/sessions/:id/raw — streaming', () => {
   it('publishes each chunk to subscribers before the request ends', async () => {
     // The CLI sends a long-lived chunked POST. Subscribers must see chunks
     // as they arrive — buffering until end would mean debug-web never sees
@@ -50,7 +72,7 @@ describe('/api/sessions/:id/raw — streaming', () => {
 
       const req = httpRequest({
         method: 'POST', host: '127.0.0.1', port: localPort,
-        path: `/api/sessions/${sid}/raw`,
+        path: `/api/v1/sessions/${sid}/raw`,
         headers: { 'content-type': 'application/octet-stream', 'transfer-encoding': 'chunked' },
       });
       req.on('error', () => {});
@@ -69,7 +91,7 @@ describe('/api/sessions/:id/raw — streaming', () => {
   });
 });
 
-describe('/api/sessions/:id/paused-state', () => {
+describe('/api/v1/sessions/:id/paused-state', () => {
   it('forwards POST {paused:bool} to onPausedReport and returns 204', async () => {
     const reports: { id: string; paused: boolean }[] = [];
     const registry = new SessionRegistry();
@@ -82,7 +104,7 @@ describe('/api/sessions/:id/paused-state', () => {
     await server.listen(0, '127.0.0.1');
     const localPort = server.address().port;
     try {
-      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/${sid}/paused-state`, {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/v1/sessions/${sid}/paused-state`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ paused: true }),
@@ -99,11 +121,11 @@ describe('/api/sessions/:id/paused-state', () => {
     await server.listen(0, '127.0.0.1');
     const localPort = server.address().port;
     try {
-      const bad = await fetch(`http://127.0.0.1:${localPort}/api/sessions/${sid}/paused-state`, {
+      const bad = await fetch(`http://127.0.0.1:${localPort}/api/v1/sessions/${sid}/paused-state`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: '{not-json',
       });
       expect(bad.status).toBe(400);
-      const missing = await fetch(`http://127.0.0.1:${localPort}/api/sessions/nope/paused-state`, {
+      const missing = await fetch(`http://127.0.0.1:${localPort}/api/v1/sessions/nope/paused-state`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"paused":true}',
       });
       expect(missing.status).toBe(404);
@@ -183,7 +205,7 @@ describe('POST /reports/rate-limits', () => {
   });
 });
 
-describe('POST /api/sessions/:id/lifecycle', () => {
+describe('POST /api/v1/sessions/:id/lifecycle', () => {
   it('returns 200 with { ok: true } on successful rename', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'sesshin-rest-lc-'));
     const db = openDb(join(dir, 'state.db'));
@@ -199,7 +221,7 @@ describe('POST /api/sessions/:id/lifecycle', () => {
     await server.listen(0, '127.0.0.1');
     const localPort = server.address().port;
     try {
-      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/lifecycle`, {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/v1/sessions/s1/lifecycle`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'rename', payload: { name: 'new' } }),
@@ -234,7 +256,7 @@ describe('POST /api/sessions/:id/lifecycle', () => {
     await server.listen(0, '127.0.0.1');
     const localPort = server.address().port;
     try {
-      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/s2/lifecycle`, {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/v1/sessions/s2/lifecycle`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'delete' }),
@@ -265,7 +287,7 @@ describe('POST /api/sessions/:id/lifecycle', () => {
     await server.listen(0, '127.0.0.1');
     const localPort = server.address().port;
     try {
-      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/s2/lifecycle`, {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/v1/sessions/s2/lifecycle`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'bogus' }),
@@ -284,7 +306,7 @@ describe('POST /api/sessions/:id/lifecycle', () => {
     await server.listen(0, '127.0.0.1');
     const localPort = server.address().port;
     try {
-      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/anything/lifecycle`, {
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/v1/sessions/anything/lifecycle`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'pause' }),
@@ -315,7 +337,7 @@ describe('shutdown', () => {
     // Open a long-lived chunked POST (the canonical hang-causing pattern).
     const req = httpRequest({
       method: 'POST', host: '127.0.0.1', port: localPort,
-      path: `/api/sessions/${sid}/raw`,
+      path: `/api/v1/sessions/${sid}/raw`,
       headers: { 'content-type': 'application/octet-stream', 'transfer-encoding': 'chunked' },
     });
     req.on('error', () => {});

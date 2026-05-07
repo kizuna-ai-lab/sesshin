@@ -138,7 +138,7 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
   const claudeSettings = readClaudeSettings({ home: homedir(), cwd });
   const initialPermissionMode =
     parsePermissionModeFlag(extraArgs) ?? claudeSettings.defaultMode ?? 'default';
-  const reg = await fetch(`${HUB_URL}/api/sessions`, {
+  const reg = await fetch(`${HUB_URL}/api/v1/sessions`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       id: sessionId, name: `claude (${cwd})`, agent: 'claude-code', cwd,
@@ -229,7 +229,7 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
     const cols = process.stdout.columns ?? 80;
     const rows = process.stdout.rows ?? 24;
     wrap.resize(cols, rows);
-    void fetch(`${HUB_URL}/api/sessions/${sessionId}/winsize`, {
+    void fetch(`${HUB_URL}/api/v1/sessions/${sessionId}/winsize`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ cols, rows }),
@@ -246,7 +246,7 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
   const pauseMonitor = startPauseMonitor({
     shellPid: wrap.pid,
     onChange: (paused) => {
-      void fetch(`${HUB_URL}/api/sessions/${sessionId}/paused-state`, {
+      void fetch(`${HUB_URL}/api/v1/sessions/${sessionId}/paused-state`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ paused }),
@@ -290,7 +290,7 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
     process.stdout.off('resize', onResize);
     tap.close();
     inject.close();
-    try { await fetch(`${HUB_URL}/api/sessions/${sessionId}`, { method: 'DELETE' }); } catch {}
+    try { await fetch(`${HUB_URL}/api/v1/sessions/${sessionId}`, { method: 'DELETE' }); } catch {}
   };
 
   installCleanup({

@@ -39,7 +39,7 @@ export function BannerDebugPanel({ sessionId }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/banner-debug`);
+      const res = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}/banner-debug`);
       if (!res.ok) {
         let detail = `HTTP ${res.status}`;
         try {

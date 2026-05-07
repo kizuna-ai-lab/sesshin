@@ -9,7 +9,7 @@ interface HistoryRow {
 }
 
 export async function runHistory(opts: { sessionId: string; n?: number; json?: boolean }): Promise<number> {
-  const r = await fetch(`${HUB}/api/sessions/${opts.sessionId}/history?n=${opts.n ?? 20}`);
+  const r = await fetch(`${HUB}/api/v1/sessions/${opts.sessionId}/history?n=${opts.n ?? 20}`);
   if (!r.ok) { process.stderr.write(`hub error ${r.status}\n`); return 1; }
   const j = await r.json() as HistoryRow[];
   if (opts.json) { process.stdout.write(JSON.stringify(j, null, 2) + '\n'); return 0; }

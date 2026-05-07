@@ -28,7 +28,7 @@ export interface LogOpts {
  * when SESSHIN_SESSION_ID is set in the environment.
  */
 export async function runLog(opts: LogOpts): Promise<number> {
-  const r = await fetch(`${hubUrl()}/api/diagnostics`);
+  const r = await fetch(`${hubUrl()}/api/v1/diagnostics`);
   if (!r.ok) {
     process.stderr.write(`hub error ${r.status}\n`);
     return 1;

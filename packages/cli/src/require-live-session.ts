@@ -39,27 +39,38 @@ export async function requireLiveSession(deps: RequireSessionDeps): Promise<Requ
     message: `${PREFIX}hub at ${hubUrl} is not reachable. The sesshin hub may have crashed; restart with 'sesshin claude'.`,
   };
 
+  const orphan: RequireSessionResult = {
+    ok: false,
+    reason: 'orphan-session',
+    message: `${PREFIX}session ${sid} is not registered with the hub. The current session is orphaned; restart with 'sesshin claude'.`,
+  };
+
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   let status: number;
+  let body: unknown = null;
   try {
-    const r = await deps.fetch(`${hubUrl}/api/sessions/${sid}`, { signal: ac.signal });
+    const r = await deps.fetch(`${hubUrl}/api/v1/sessions/${sid}`, { signal: ac.signal });
     status = r.status;
+    if (status >= 200 && status < 300) {
+      try { body = await r.json(); } catch { body = null; }
+    }
   } catch {
     return hubDown;
   } finally {
     clearTimeout(timer);
   }
 
-  if (status === 404) {
-    return {
-      ok: false,
-      reason: 'orphan-session',
-      message: `${PREFIX}session ${sid} is not registered with the hub. The current session is orphaned; restart with 'sesshin claude'.`,
-    };
-  }
-  if (status < 200 || status >= 300) {
-    return hubDown;
-  }
+  if (status === 404) return orphan;
+  if (status < 200 || status >= 300) return hubDown;
+
+  // Catalog detail (T17) returns the persisted row even for ended sessions —
+  // those are orphans for live-session purposes. Older fixtures answer with
+  // `{ id }` only (no endedAt field), which we treat as live.
+  const endedAt = (body && typeof body === 'object' && 'endedAt' in (body as Record<string, unknown>))
+    ? (body as Record<string, unknown>)['endedAt']
+    : null;
+  if (endedAt != null) return orphan;
+
   return { ok: true, sessionId: sid, hubUrl };
 }

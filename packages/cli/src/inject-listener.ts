@@ -20,7 +20,7 @@ export function startInjectListener(opts: InjectListenerOpts): { close(): void }
     if (closed) return;
     req = request({
       method: 'POST', host: url.hostname, port: Number(url.port),
-      path: `/api/sessions/${opts.sessionId}/sink-stream`,
+      path: `/api/v1/sessions/${opts.sessionId}/sink-stream`,
       headers: { 'content-type': 'application/json', 'connection': 'keep-alive' },
     }, (res: IncomingMessage) => {
       let buf = '';

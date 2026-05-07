@@ -21,10 +21,10 @@ beforeEach(async () => {
 });
 afterEach(async () => { await svr.close(); });
 
-describe('GET /api/diagnostics', () => {
+describe('GET /api/v1/diagnostics', () => {
   it('returns sessions, mode, pending approvals', async () => {
     registry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const r = await fetch(`http://127.0.0.1:${port}/api/v1/diagnostics`);
     expect(r.status).toBe(200);
     const j = await r.json();
     expect(j.sessions).toHaveLength(1);
@@ -46,7 +46,7 @@ describe('GET /api/diagnostics', () => {
     await localSvr.listen(0, '127.0.0.1');
     const localPort = localSvr.address().port;
     try {
-      const r = await fetch(`http://127.0.0.1:${localPort}/api/diagnostics`);
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/v1/diagnostics`);
       expect(r.status).toBe(503);
     } finally {
       await localSvr.close();
@@ -56,13 +56,13 @@ describe('GET /api/diagnostics', () => {
   it('reflects pending approvals count', async () => {
     registry.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
     approvals.open({ sessionId: 's1', tool: 'Bash', toolInput: { command: 'ls' }, timeoutMs: 60_000, origin: 'permission', questions: [] });
-    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const r = await fetch(`http://127.0.0.1:${port}/api/v1/diagnostics`);
     const j = await r.json();
     expect(j.sessions[0].pendingApprovals).toBe(1);
   });
   it('exposes sessionFilePath when set', async () => {
     registry.register({ id: 's4', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/abs/path/to/transcript.jsonl' });
-    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const r = await fetch(`http://127.0.0.1:${port}/api/v1/diagnostics`);
     const j = await r.json();
     const s = j.sessions.find((x: { id: string }) => x.id === 's4')!;
     expect(s.sessionFilePath).toBe('/abs/path/to/transcript.jsonl');
@@ -71,14 +71,14 @@ describe('GET /api/diagnostics', () => {
   it('exposes claudeSessionId when set', async () => {
     registry.register({ id: 's6', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
     registry.setClaudeSessionId('s6', 'cc-123');
-    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const r = await fetch(`http://127.0.0.1:${port}/api/v1/diagnostics`);
     const j = await r.json();
     const s = j.sessions.find((x: { id: string }) => x.id === 's6')!;
     expect(s.claudeSessionId).toBe('cc-123');
   });
   it('omits sessionFilePath when not set', async () => {
     registry.register({ id: 's5', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '' });
-    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const r = await fetch(`http://127.0.0.1:${port}/api/v1/diagnostics`);
     const j = await r.json();
     const s = j.sessions.find((x: { id: string }) => x.id === 's5')!;
     expect('sessionFilePath' in s).toBe(false);
@@ -88,7 +88,7 @@ describe('GET /api/diagnostics', () => {
     registry.register({ id: 's7', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
     const rec = registry.get('s7')!;
     rec.lastHeartbeat = Date.now() - 121_000;
-    const r = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    const r = await fetch(`http://127.0.0.1:${port}/api/v1/diagnostics`);
     const j = await r.json();
     const s = j.sessions.find((x: { id: string }) => x.id === 's7')!;
     expect(s.heartbeatExpired).toBe(true);
@@ -96,7 +96,7 @@ describe('GET /api/diagnostics', () => {
   });
 });
 
-describe('GET /api/sessions/:id/clients', () => {
+describe('GET /api/v1/sessions/:id/clients', () => {
   it('returns the listClients result', async () => {
     const localRegistry = new SessionRegistry();
     const localApprovals = new ApprovalManager({ defaultTimeoutMs: 60_000 });
@@ -108,7 +108,7 @@ describe('GET /api/sessions/:id/clients', () => {
     await localSvr.listen(0, '127.0.0.1');
     const localPort = localSvr.address().port;
     try {
-      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/clients`);
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/v1/sessions/s1/clients`);
       expect(r.status).toBe(200);
       const j = await r.json();
       expect(j).toHaveLength(1);
@@ -119,12 +119,12 @@ describe('GET /api/sessions/:id/clients', () => {
   });
 
   it('rejects non-GET with 405', async () => {
-    const r = await fetch(`http://127.0.0.1:${port}/api/sessions/s1/clients`, { method: 'POST' });
+    const r = await fetch(`http://127.0.0.1:${port}/api/v1/sessions/s1/clients`, { method: 'POST' });
     expect(r.status).toBe(405);
   });
 });
 
-describe('GET /api/sessions/:id/history', () => {
+describe('GET /api/v1/sessions/:id/history', () => {
   it('returns the historyForSession result', async () => {
     const localRegistry = new SessionRegistry();
     const localApprovals = new ApprovalManager({ defaultTimeoutMs: 60_000 });
@@ -139,7 +139,7 @@ describe('GET /api/sessions/:id/history', () => {
     await localSvr.listen(0, '127.0.0.1');
     const localPort = localSvr.address().port;
     try {
-      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/history?n=10`);
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/v1/sessions/s1/history?n=10`);
       expect(r.status).toBe(200);
       const j = await r.json();
       expect(j).toHaveLength(2);
@@ -162,7 +162,7 @@ describe('GET /api/sessions/:id/history', () => {
     await localSvr.listen(0, '127.0.0.1');
     const localPort = localSvr.address().port;
     try {
-      await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/history`);
+      await fetch(`http://127.0.0.1:${localPort}/api/v1/sessions/s1/history`);
       expect(nReceived).toBe(20);
     } finally {
       await localSvr.close();
@@ -181,7 +181,7 @@ describe('GET /api/sessions/:id/history', () => {
     await localSvr.listen(0, '127.0.0.1');
     const localPort = localSvr.address().port;
     try {
-      await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/history?n=abc`);
+      await fetch(`http://127.0.0.1:${localPort}/api/v1/sessions/s1/history?n=abc`);
       expect(nReceived).toBe(20);
     } finally {
       await localSvr.close();
@@ -200,7 +200,7 @@ describe('GET /api/sessions/:id/history', () => {
     await localSvr.listen(0, '127.0.0.1');
     const localPort = localSvr.address().port;
     try {
-      await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/history?n=999`);
+      await fetch(`http://127.0.0.1:${localPort}/api/v1/sessions/s1/history?n=999`);
       expect(nReceived).toBe(100);
     } finally {
       await localSvr.close();
@@ -228,7 +228,7 @@ describe('GET /api/sessions/:id/history', () => {
     await localSvr.listen(0, '127.0.0.1');
     const localPort = localSvr.address().port;
     try {
-      const r = await fetch(`http://127.0.0.1:${localPort}/api/sessions/s1/history`);
+      const r = await fetch(`http://127.0.0.1:${localPort}/api/v1/sessions/s1/history`);
       const j = await r.json();
       expect(j).toHaveLength(3);
       expect(j[0].requestId).toBe('r3');   // newest first

@@ -661,7 +661,7 @@ export async function startHub(): Promise<HubInstance> {
 
   // REST server
   const rest = createRestServer({
-    registry, tap, onHookEvent, lifecycle,
+    registry, db, tap, onHookEvent, lifecycle,
     onInjectFromHub: (id, data, source) => bridge.deliver(id, data, source).then((r) => r.ok),
     onAttachSink:    (id, deliver) => { bridge.setSink(id, deliver); },
     onDetachSink:    (id) => { bridge.clearSink(id); },

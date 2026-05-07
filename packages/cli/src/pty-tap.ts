@@ -69,7 +69,7 @@ export function startPtyTap(opts: PtyTapOptions): PtyTapHandle {
       method: 'POST',
       host: url.hostname,
       port,
-      path: `/api/sessions/${opts.sessionId}/raw`,
+      path: `/api/v1/sessions/${opts.sessionId}/raw`,
       headers: {
         'content-type': 'application/octet-stream',
         'transfer-encoding': 'chunked',

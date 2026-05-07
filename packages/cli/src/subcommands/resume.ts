@@ -5,12 +5,12 @@ export interface ResumeOpts {
 }
 
 /**
- * POST `/api/sessions/:id/lifecycle` with action=resume. Continues a paused
+ * POST `/api/v1/sessions/:id/lifecycle` with action=resume. Continues a paused
  * Claude Code process via SIGCONT. Hub returns 200 on success or 409 with a
  * `code` (e.g. `lifecycle.invalid-state`) when the session is not paused.
  */
 export async function runResume(opts: ResumeOpts): Promise<number> {
-  const res = await opts.fetch(`${opts.hubUrl}/api/sessions/${opts.sessionId}/lifecycle`, {
+  const res = await opts.fetch(`${opts.hubUrl}/api/v1/sessions/${opts.sessionId}/lifecycle`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ action: 'resume' }),

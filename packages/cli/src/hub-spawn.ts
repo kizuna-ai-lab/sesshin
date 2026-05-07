@@ -20,7 +20,7 @@ async function healthOk(port: number, timeoutMs: number): Promise<boolean> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const r = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: ctrl.signal });
+    const r = await fetch(`http://127.0.0.1:${port}/api/v1/health`, { signal: ctrl.signal });
     return r.ok;
   } catch { return false; }
   finally { clearTimeout(t); }

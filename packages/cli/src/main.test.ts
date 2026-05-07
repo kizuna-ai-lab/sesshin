@@ -84,7 +84,7 @@ describe('main() session-context gate', () => {
       fetch: (async () => new Response(JSON.stringify({ id: 'abc' }), { status: 200 })) as typeof globalThis.fetch,
     });
     const code = await mainWithDeps(deps);
-    // The dispatch will call /api/diagnostics with real fetch → likely fails;
+    // The dispatch will call /api/v1/diagnostics with real fetch → likely fails;
     // we don't care what code it returns, only that it isn't the gate's 3.
     expect(code).not.toBe(3);
     expect(stderr.join('')).not.toMatch(/^sesshin: not in a live sesshin session/);
@@ -93,10 +93,10 @@ describe('main() session-context gate', () => {
 
 /**
  * Dispatch coverage for lifecycle subcommands. Each test stubs the gate
- * (`/api/sessions/:id` → 200) AND the lifecycle POST in a single fetch
+ * (`/api/v1/sessions/:id` → 200) AND the lifecycle POST in a single fetch
  * function, so the gate accepts and dispatch reaches `runPause` etc.
  *
- * To distinguish the two calls we look at the URL: gate hits `/api/sessions/<id>`
+ * To distinguish the two calls we look at the URL: gate hits `/api/v1/sessions/<id>`
  * (no trailing path), lifecycle hits `.../lifecycle`.
  */
 describe('main() dispatch — lifecycle subcommands', () => {
@@ -133,7 +133,7 @@ describe('main() dispatch — lifecycle subcommands', () => {
     const code = await mainWithDeps(deps);
     expect(code).toBe(0);
     expect(lifecycleCalls[0]!.body).toEqual({ action: 'resume' });
-    expect(lifecycleCalls[0]!.url).toContain('/api/sessions/sess/lifecycle');
+    expect(lifecycleCalls[0]!.url).toContain('/api/v1/sessions/sess/lifecycle');
   });
 
   it('kill: posts {action:"kill"}', async () => {

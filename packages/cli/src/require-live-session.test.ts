@@ -82,6 +82,20 @@ describe('requireLiveSession', () => {
     }
   });
 
+  it('returns orphan-session on 200 when catalog reports endedAt set', async () => {
+    // After T17 the GET catalog detail surfaces ended sessions with 200 + a
+    // non-null endedAt. For live-session purposes those are still orphans.
+    const fakeFetch: typeof globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ id: 'abc', endedAt: 1234, name: 'old' }), { status: 200 })
+    ) as typeof globalThis.fetch;
+    const r = await requireLiveSession({
+      env: { SESSHIN_SESSION_ID: 'abc' },
+      fetch: fakeFetch,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('orphan-session');
+  });
+
   it('returns ok on 200', async () => {
     const r = await requireLiveSession({
       env: { SESSHIN_SESSION_ID: 'abc' },
@@ -106,7 +120,7 @@ describe('requireLiveSession', () => {
       fetch: fakeFetch,
     });
     expect(r.ok).toBe(true);
-    expect(calledWith).toBe('http://127.0.0.1:9663/api/sessions/explicit');
+    expect(calledWith).toBe('http://127.0.0.1:9663/api/v1/sessions/explicit');
   });
 
   it('uses env.SESSHIN_HUB_URL when present', async () => {
@@ -120,6 +134,6 @@ describe('requireLiveSession', () => {
       fetch: fakeFetch,
     });
     expect(r.ok).toBe(true);
-    expect(calledWith).toBe('http://127.0.0.1:9999/api/sessions/abc');
+    expect(calledWith).toBe('http://127.0.0.1:9999/api/v1/sessions/abc');
   });
 });

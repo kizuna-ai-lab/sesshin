@@ -50,7 +50,7 @@ describe('runPause', () => {
     const code = await runPause({ sessionId: 'abc', hubUrl: 'http://h:9663', fetch });
     expect(code).toBe(0);
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toBe('http://h:9663/api/sessions/abc/lifecycle');
+    expect(calls[0]!.url).toBe('http://h:9663/api/v1/sessions/abc/lifecycle');
     expect(calls[0]!.init?.method).toBe('POST');
     expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({ action: 'pause' });
     expect(writes.join('')).toBe('paused\n');
@@ -70,7 +70,7 @@ describe('runResume', () => {
     const { fetch, calls } = stubFetch({ status: 200, body: '{"ok":true}' });
     const code = await runResume({ sessionId: 'sX', hubUrl: 'http://h:9663', fetch });
     expect(code).toBe(0);
-    expect(calls[0]!.url).toBe('http://h:9663/api/sessions/sX/lifecycle');
+    expect(calls[0]!.url).toBe('http://h:9663/api/v1/sessions/sX/lifecycle');
     expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({ action: 'resume' });
     expect(writes.join('')).toBe('resumed\n');
   });

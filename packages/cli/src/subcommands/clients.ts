@@ -11,7 +11,7 @@ export async function runClients(opts: { sessionId?: string; json?: boolean }): 
     process.stderr.write('clients: --session <id> required\n');
     return 2;
   }
-  const r = await fetch(`${HUB}/api/sessions/${opts.sessionId}/clients`);
+  const r = await fetch(`${HUB}/api/v1/sessions/${opts.sessionId}/clients`);
   if (!r.ok) { process.stderr.write(`hub error ${r.status}\n`); return 1; }
   const j = await r.json() as ClientRow[];
   if (opts.json) { process.stdout.write(JSON.stringify(j, null, 2) + '\n'); return 0; }

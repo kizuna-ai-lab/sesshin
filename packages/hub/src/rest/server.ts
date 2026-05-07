@@ -6,11 +6,20 @@ import type { SessionRegistry } from '../registry/session-registry.js';
 import type { PtyTap } from '../observers/pty-tap.js';
 import type { ApprovalManager } from '../approval-manager.js';
 import type { LifecycleHandler } from '../lifecycle/handler.js';
+import type { Db } from '../storage/db.js';
 import type { ClientInfo, HistoryEntry } from './diagnostics.js';
 import { handlePermissionRoute } from './permission.js';
+import { listSessions as catalogList, getSessionDetail } from './sessions-catalog.js';
 
 export interface RestServerDeps {
   registry: SessionRegistry;
+  /**
+   * SQLite-backed catalog (sessions/messages/actions). Used by
+   * `GET /api/v1/sessions` and `GET /api/v1/sessions/:id`. Optional only for
+   * tests that don't exercise the catalog routes — when omitted, those
+   * routes return 503.
+   */
+  db?: Db;
   /** Fired when a valid hook event arrives. Wired in T26. */
   onHookEvent?: (envelope: { agent: string; sessionId: string; ts: number; event: string; raw: Record<string, unknown> }) => void;
   /** PtyTap for raw byte ingest (T30/M4). */
@@ -34,12 +43,12 @@ export interface RestServerDeps {
   onPermissionRequestApproval?: (envelope: {
     agent: string; sessionId: string; ts: number; event: string; raw: Record<string, unknown>;
   }) => Promise<PermissionRequestDecision | null>;
-  /** Approval manager for diagnostics endpoint (T9). When omitted, /api/diagnostics returns 503. */
+  /** Approval manager for diagnostics endpoint (T9). When omitted, /api/v1/diagnostics returns 503. */
   approvals?: ApprovalManager;
   /**
-   * Lifecycle handler for `POST /api/sessions/:id/lifecycle` passthrough (used
-   * by CLI subcommands `sesshin pause/resume/kill/rename`). When omitted, the
-   * route returns 501.
+   * Lifecycle handler for `POST /api/v1/sessions/:id/lifecycle` passthrough
+   * (used by CLI subcommands `sesshin pause/resume/kill/rename`). When
+   * omitted, the route returns 501.
    */
   lifecycle?: LifecycleHandler;
   /** True iff there's a connected actions-capable client subscribed to this session. */
@@ -154,14 +163,24 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
   const url = new URL(req.url ?? '/', 'http://x');
   const method = req.method ?? 'GET';
 
-  if (url.pathname === '/api/health') return health(method, res);
+  // 410 Gone: every un-versioned `/api/...` path. Versioned API lives under
+  // `/api/v1/...`; legacy paths return a structured error so old clients can
+  // notice the bump rather than silently 404. Other top-level paths
+  // (`/hooks`, `/permission/:sid`, `/reports/...`) are unversioned by design
+  // and must keep working.
+  if (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/v1/')) {
+    return void res.writeHead(410, { 'content-type': 'application/json' })
+                   .end(JSON.stringify({ error: 'use /api/v1' }));
+  }
 
-  if (url.pathname === '/api/sessions') {
-    if (method === 'GET')  return listSessions(res, deps);
+  if (url.pathname === '/api/v1/health') return health(method, res);
+
+  if (url.pathname === '/api/v1/sessions') {
+    if (method === 'GET')  return listSessionsCatalog(url, res, deps);
     if (method === 'POST') return registerSession(req, res, deps);
     return void res.writeHead(405).end();
   }
-  const raw = url.pathname.match(/^\/api\/sessions\/([^/]+)\/raw$/);
+  const raw = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/raw$/);
   if (raw) {
     const id = raw[1]!;
     if (method !== 'POST') return void res.writeHead(405).end();
@@ -180,7 +199,7 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     req.on('error', () => { if (!res.headersSent) res.writeHead(400).end(); });
     return;
   }
-  const sink = url.pathname.match(/^\/api\/sessions\/([^/]+)\/sink-stream$/);
+  const sink = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/sink-stream$/);
   if (sink) {
     const id = sink[1]!;
     if (method !== 'POST') return void res.writeHead(405).end();
@@ -194,7 +213,7 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     res.on('close', detach);
     return;
   }
-  const winsize = url.pathname.match(/^\/api\/sessions\/([^/]+)\/winsize$/);
+  const winsize = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/winsize$/);
   if (winsize) {
     const id = winsize[1]!;
     if (method !== 'POST') return void res.writeHead(405).end();
@@ -210,7 +229,7 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
   // cli's pause-monitor reports tpgid-derived paused state. Hub mirrors into
   // substate.paused and the existing substate-changed broadcast carries it
   // to debug-web for banner / input gating.
-  const pausedReport = url.pathname.match(/^\/api\/sessions\/([^/]+)\/paused-state$/);
+  const pausedReport = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/paused-state$/);
   if (pausedReport) {
     const id = pausedReport[1]!;
     if (method !== 'POST') return void res.writeHead(405).end();
@@ -223,7 +242,7 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     deps.onPausedReport?.(id, parsed.data.paused);
     return void res.writeHead(204).end();
   }
-  const inj = url.pathname.match(/^\/api\/sessions\/([^/]+)\/inject$/);
+  const inj = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/inject$/);
   if (inj) {
     const id = inj[1]!;
     if (method !== 'POST') return void res.writeHead(405).end();
@@ -235,7 +254,7 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     const ok = await deps.onInjectFromHub?.(id, parsed.data.data, parsed.data.source);
     return void res.writeHead(ok ? 204 : 502).end();
   }
-  const bannerDebug = url.pathname.match(/^\/api\/sessions\/([^/]+)\/banner-debug$/);
+  const bannerDebug = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/banner-debug$/);
   if (bannerDebug) {
     const id = bannerDebug[1]!;
     if (method !== 'GET') return void res.writeHead(405).end();
@@ -258,7 +277,7 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     return void res.writeHead(200, { 'content-type': 'application/json' })
                    .end(JSON.stringify(diag));
   }
-  const lc = url.pathname.match(/^\/api\/sessions\/([^/]+)\/lifecycle$/);
+  const lc = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/lifecycle$/);
   if (lc) {
     const id = lc[1]!;
     if (method !== 'POST') return void res.writeHead(405).end();
@@ -285,20 +304,17 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     return void res.writeHead(status, { 'content-type': 'application/json' })
                    .end(JSON.stringify(responseBody));
   }
-  const hb = url.pathname.match(/^\/api\/sessions\/([^/]+)\/heartbeat$/);
+  const hb = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/heartbeat$/);
   if (hb) {
     const id = hb[1]!;
     if (method !== 'POST') return void res.writeHead(405).end();
     const ok = deps.registry.recordHeartbeat(id);
     return void res.writeHead(ok ? 204 : 404).end();
   }
-  const m = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
+  const m = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)$/);
   if (m) {
     const id = m[1]!;
-    if (method === 'GET') {
-      if (!deps.registry.get(id)) return void res.writeHead(404).end();
-      return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ id }));
-    }
+    if (method === 'GET') return getSessionForRoute(id, res, deps);
     if (method === 'DELETE') return unregisterSession(id, res, deps);
     return void res.writeHead(405).end();
   }
@@ -327,7 +343,7 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     return ingestHook(req, res, deps);
   }
 
-  if (url.pathname === '/api/diagnostics') {
+  if (url.pathname === '/api/v1/diagnostics') {
     if (method !== 'GET') return void res.writeHead(405).end();
     if (!deps.approvals) return void res.writeHead(503).end();
     const { writeDiagnostics } = await import('./diagnostics.js');
@@ -339,14 +355,14 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
       historyForSession: deps.historyForSession ?? (() => []),
     });
   }
-  const cm = url.pathname.match(/^\/api\/sessions\/([^/]+)\/clients$/);
+  const cm = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/clients$/);
   if (cm) {
     const id = cm[1]!;
     if (method !== 'GET') return void res.writeHead(405).end();
     const list = deps.listClients?.(id) ?? [];
     return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(list));
   }
-  const hm = url.pathname.match(/^\/api\/sessions\/([^/]+)\/history$/);
+  const hm = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/history$/);
   if (hm) {
     const id = hm[1]!;
     if (method !== 'GET') return void res.writeHead(405).end();
@@ -433,9 +449,57 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf-8'));
 }
 
-function listSessions(res: ServerResponse, deps: RestServerDeps): void {
-  res.writeHead(200, { 'content-type': 'application/json' })
-     .end(JSON.stringify(deps.registry.list()));
+/**
+ * `GET /api/v1/sessions` — paginated catalog of persisted sessions backed by
+ * SQLite. Returns `{ sessions, hasMore }` where each entry includes
+ * `messageCount` and a 200-char `lastMessage.contentPreview`. Supports query
+ * params `?state=`, `?agent=`, `?before=`, `?limit=`, `?includeHidden=`,
+ * `?includeEnded=`. When `db` is unwired (test fixtures), falls back to the
+ * registry's live list to preserve the historical surface.
+ */
+function listSessionsCatalog(url: URL, res: ServerResponse, deps: RestServerDeps): void {
+  if (!deps.db) {
+    return void res.writeHead(200, { 'content-type': 'application/json' })
+                   .end(JSON.stringify(deps.registry.list()));
+  }
+  const q = url.searchParams;
+  const opts: {
+    state?: string; agent?: string; before?: number; limit?: number;
+    includeHidden?: boolean; includeEnded?: boolean;
+  } = {};
+  const state = q.get('state'); if (state) opts.state = state;
+  const agent = q.get('agent'); if (agent) opts.agent = agent;
+  const before = q.get('before');
+  if (before !== null) {
+    const n = Number(before);
+    if (Number.isFinite(n)) opts.before = n;
+  }
+  const limit = q.get('limit');
+  if (limit !== null) {
+    const n = Number(limit);
+    if (Number.isFinite(n)) opts.limit = n;
+  }
+  if (q.get('includeHidden') === 'true') opts.includeHidden = true;
+  if (q.get('includeEnded')  === 'true') opts.includeEnded  = true;
+  const result = catalogList(deps.db, opts);
+  res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(result));
+}
+
+/**
+ * `GET /api/v1/sessions/:id` — full detail for a single session including the
+ * last 50 messages. Resolves through the SQLite catalog so ended sessions
+ * remain queryable; falls back to the registry-only `{ id }` shape if `db`
+ * is unwired (legacy test fixtures).
+ */
+function getSessionForRoute(id: string, res: ServerResponse, deps: RestServerDeps): void {
+  if (!deps.db) {
+    if (!deps.registry.get(id)) return void res.writeHead(404).end();
+    return void res.writeHead(200, { 'content-type': 'application/json' })
+                   .end(JSON.stringify({ id }));
+  }
+  const detail = getSessionDetail(deps.db, id);
+  if (!detail) return void res.writeHead(404).end();
+  res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(detail));
 }
 
 async function registerSession(req: IncomingMessage, res: ServerResponse, deps: RestServerDeps): Promise<void> {

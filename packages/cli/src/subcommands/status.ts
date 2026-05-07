@@ -12,7 +12,7 @@ interface DiagSession {
 }
 
 export async function runStatus(opts: { sessionId?: string; json?: boolean }): Promise<number> {
-  const r = await fetch(`${HUB}/api/diagnostics`);
+  const r = await fetch(`${HUB}/api/v1/diagnostics`);
   if (!r.ok) { process.stderr.write(`hub error ${r.status}\n`); return 1; }
   const j = await r.json() as { sessions: DiagSession[] };
   const sessions = opts.sessionId ? j.sessions.filter((s) => s.id === opts.sessionId) : j.sessions;
