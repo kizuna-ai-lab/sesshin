@@ -3,7 +3,37 @@ import {
   sessions, upsertSession, removeSession,
   promptRequestsBySession, addPromptRequest,
   summariesBySession, eventsBySession,
+  rateLimitsBySession, applyRateLimits,
 } from './store.js';
+import { handleFrame } from './ws-client.js';
+
+describe('rateLimits slice', () => {
+  beforeEach(() => {
+    rateLimitsBySession.value = {};
+  });
+
+  it('starts with an empty object', () => {
+    expect(Object.keys(rateLimitsBySession.value)).toHaveLength(0);
+  });
+
+  it('applyRateLimits writes per session', () => {
+    applyRateLimits('s1', {
+      five_hour: { used_percentage: 45, resets_at: 100 },
+      seven_day: null,
+      observed_at: 1,
+    });
+    expect(rateLimitsBySession.value['s1']?.five_hour?.used_percentage).toBe(45);
+  });
+
+  it('dispatches session.rate-limits WS messages', () => {
+    handleFrame({
+      type: 'session.rate-limits',
+      sessionId: 's1',
+      rateLimits: { five_hour: null, seven_day: { used_percentage: 23, resets_at: 200 }, observed_at: 999 },
+    });
+    expect(rateLimitsBySession.value['s1']?.seven_day?.used_percentage).toBe(23);
+  });
+});
 
 describe('removeSession side-effects', () => {
   beforeEach(() => {

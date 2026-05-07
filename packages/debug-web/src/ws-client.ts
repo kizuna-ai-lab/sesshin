@@ -3,6 +3,7 @@ import {
   addSummary, addEvent, lastEventId,
   addPromptRequest, removePromptRequest,
   applyConfigChanged, applyChildSessionChanged,
+  applyRateLimits,
 } from './store.js';
 import type { Action, PromptResponseAnswer } from '@sesshin/shared';
 
@@ -81,7 +82,7 @@ function handleTerminalFrame(m: any): boolean {
   return false;
 }
 
-function handleFrame(m: any): void {
+export function handleFrame(m: any): void {
   if (handleTerminalFrame(m)) return;
   switch (m.type) {
     case 'server.hello': return;
@@ -112,6 +113,9 @@ function handleFrame(m: any): void {
       }); return;
     case 'session.child-changed':
       applyChildSessionChanged(m.sessionId, m.claudeSessionId);
+      return;
+    case 'session.rate-limits':
+      applyRateLimits(m.sessionId, m.rateLimits);
       return;
   }
 }
