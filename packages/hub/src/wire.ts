@@ -488,10 +488,6 @@ export async function startHub(): Promise<HubInstance> {
       restored.lastSummaryId = r.lastSummaryId;
       restored.fileTailCursor = r.fileTailCursor;
       restored.lastHeartbeat = r.lastHeartbeat;
-      restored.claudeAllowRules = [...r.claudeAllowRules];
-      restored.sessionGateOverride = r.sessionGateOverride;
-      restored.pin = r.pin;
-      restored.quietUntil = r.quietUntil;
       restored.claudeSessionId = r.claudeSessionId;
     } catch (e) {
       log.warn({ err: e, id: r.id }, 'failed to restore session');
@@ -695,7 +691,7 @@ export async function startHub(): Promise<HubInstance> {
       ws.broadcast({ type: 'terminal.ended', sessionId: s.id, reason: s.state });
     }
   });
-  registry.on('config-changed', (s) => {
+  registry.on('winsize-changed', (s) => {
     if (s.cols && s.rows) {
       terminals.get(s.id)?.resize(s.cols, s.rows);
     }

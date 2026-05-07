@@ -34,7 +34,6 @@ export function diagnosticsSnapshot(deps: DiagnosticsDeps): {
     state: string;
     permissionMode: string;
     claudeSessionId: string | null;
-    claudeAllowRules: string[];
     pendingApprovals: number;
     hasSubscribedActionsClient: boolean;
     lastHeartbeatAgeMs: number;
@@ -58,7 +57,6 @@ export function diagnosticsSnapshot(deps: DiagnosticsDeps): {
         state: info.state,
         permissionMode: info.substate.permissionMode,
         claudeSessionId: info.claudeSessionId,
-        claudeAllowRules: rec.claudeAllowRules,
         pendingApprovals: deps.approvals.pendingForSession(info.id).length,
         hasSubscribedActionsClient: deps.hasSubscribedActionsClient(info.id),
         lastHeartbeatAgeMs: liveness.lastHeartbeatAgeMs,

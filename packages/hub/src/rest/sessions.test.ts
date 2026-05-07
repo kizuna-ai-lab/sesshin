@@ -41,22 +41,18 @@ describe('/api/sessions', () => {
     });
     expect(r.status).toBe(400);
   });
-  it('accepts initialPermissionMode + claudeAllowRules in register body', async () => {
+  it('accepts initialPermissionMode in register body', async () => {
     const r = await fetch(`http://127.0.0.1:${port}/api/sessions`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         id: 'sNew', name: 'n', agent: 'claude-code', cwd: '/', pid: 99,
         sessionFilePath: '/x.jsonl',
         initialPermissionMode: 'auto',
-        claudeAllowRules: ['Bash(git log:*)'],
       }),
     });
     expect(r.status).toBe(201);
     const list = await (await fetch(`http://127.0.0.1:${port}/api/sessions`)).json();
     expect(list.find((s: any) => s.id === 'sNew')?.substate.permissionMode).toBe('auto');
-    // claudeAllowRules round-trip — accessed via the registry directly because
-    // publicView intentionally strips this internal-state field.
-    expect(registry.get('sNew')?.claudeAllowRules).toEqual(['Bash(git log:*)']);
   });
 });
 

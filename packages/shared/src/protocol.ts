@@ -238,10 +238,6 @@ export const SessionPromptRequestResolvedSchema = z.object({
   resolvedBy: z.string().nullable().optional(),
 });
 
-// Server tells subscribers a session's user-set sticky configuration
-// changed (pin / quietUntil / sessionGateOverride). Carries the full
-// snapshot of all three rather than a delta — keeps client merge logic
-// trivial. Gated on `state` capability.
 // Server tells subscribers that the Claude child process bound to this
 // sesshin session crossed a session boundary — i.e. raw.session_id changed
 // (SessionStart for /clear, --resume, fresh startup) or the child's
@@ -260,7 +256,7 @@ export const SessionPromptRequestResolvedSchema = z.object({
 // `'session-end'` is the value used on the SessionEnd-driven clear.
 // `'unknown'` is the fallback when source is missing or unrecognized.
 //
-// Gated on `state` capability (mirrors session.config-changed).
+// Gated on `state` capability.
 export const SessionChildChangedSchema = z.object({
   type:                    z.literal('session.child-changed'),
   sessionId:               z.string(),

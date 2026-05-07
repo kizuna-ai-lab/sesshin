@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { RateLimitsState } from '@sesshin/shared';
 import { SessionRegistry } from './session-registry.js';
 
@@ -13,6 +13,14 @@ describe('SessionRegistry', () => {
     });
     expect(s.id).toBe('s1');
     expect(r.get('s1')).toMatchObject({ id: 's1', state: 'starting' });
+  });
+  it('register initializes lifecycle fields (endedAt/endReason/hidden)', () => {
+    const r = makeReg();
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    const rec = r.get('s1')!;
+    expect(rec.endedAt).toBeNull();
+    expect(rec.endReason).toBeNull();
+    expect(rec.hidden).toBe(false);
   });
   it('unregister returns true on existing id, false on missing', () => {
     const r = makeReg();
@@ -57,34 +65,6 @@ describe('SessionRegistry', () => {
     expect(events).toEqual(['auto']);
     expect(r.setPermissionMode('missing', 'plan')).toBe(false);
   });
-
-  it('setSessionGateOverride is read via getSessionGateOverride', () => {
-    const r = makeReg();
-    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    expect(r.getSessionGateOverride('s1')).toBe(null);
-    expect(r.setSessionGateOverride('s1', 'always')).toBe(true);
-    expect(r.getSessionGateOverride('s1')).toBe('always');
-    expect(r.setSessionGateOverride('missing', 'auto')).toBe(false);
-    expect(r.getSessionGateOverride('missing')).toBe(null);
-  });
-
-  it('pin and quiet round-trip', () => {
-    const r = makeReg();
-    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    expect(r.getPin('s1')).toBe(null);
-    expect(r.setPin('s1', 'hello')).toBe(true);
-    expect(r.getPin('s1')).toBe('hello');
-    expect(r.setPin('s1', null)).toBe(true);
-    expect(r.getPin('s1')).toBe(null);
-    expect(r.setPin('missing', 'x')).toBe(false);
-
-    expect(r.getQuietUntil('s1')).toBe(null);
-    expect(r.setQuietUntil('s1', 1234)).toBe(true);
-    expect(r.getQuietUntil('s1')).toBe(1234);
-    expect(r.setQuietUntil('s1', null)).toBe(true);
-    expect(r.getQuietUntil('s1')).toBe(null);
-    expect(r.setQuietUntil('missing', 1)).toBe(false);
-  });
 });
 
 describe('SessionRegistry — publicView surfaces sessionFilePath', () => {
@@ -105,107 +85,42 @@ describe('SessionRegistry — publicView surfaces sessionFilePath', () => {
     r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/p.jsonl' });
     expect(captured.sessionFilePath).toBe('/p.jsonl');
   });
-  it('publicView does NOT leak claudeAllowRules / etc.', () => {
+  it('publicView does NOT leak hub-private fields', () => {
     const r = makeReg();
     r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/p.jsonl' });
     const view = r.list()[0] as Record<string, unknown>;
-    expect('claudeAllowRules' in view).toBe(false);
     expect('lastHeartbeat' in view).toBe(false);
     expect('fileTailCursor' in view).toBe(false);
     expect('rateLimits' in view).toBe(false);
-    // pin, quietUntil, sessionGateOverride are now surfaced in publicView:
-    expect('pin' in view).toBe(true);
-    expect('quietUntil' in view).toBe(true);
-    expect('sessionGateOverride' in view).toBe(true);
+    // dropped sticky-config fields no longer exist anywhere on the record:
+    expect('claudeAllowRules' in view).toBe(false);
+    expect('pin' in view).toBe(false);
+    expect('quietUntil' in view).toBe(false);
+    expect('sessionGateOverride' in view).toBe(false);
   });
 });
 
-describe('publicView and config-changed event', () => {
-  function fixtureRegistry(): SessionRegistry {
+describe('winsize-changed event', () => {
+  it('setSessionWinsize emits winsize-changed only on actual change', () => {
     const r = new SessionRegistry();
-    r.register({
-      id: 's1', name: 'n', agent: 'claude-code', cwd: '/x', pid: 1, sessionFilePath: '/x/s1.jsonl'
-    });
-    return r;
-  }
-
-  it('publicView includes pin/quietUntil/sessionGateOverride after register', () => {
-    const r = fixtureRegistry();
-    const s = r.list()[0]!;
-    expect(s.pin).toBeNull();
-    expect(s.quietUntil).toBeNull();
-    expect(s.sessionGateOverride).toBeNull();
-  });
-
-  it('setPin emits config-changed with the new pin in the snapshot', () => {
-    const r = fixtureRegistry();
-    const id = r.list()[0]!.id;
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x', cols: 80, rows: 24 });
     const events: any[] = [];
-    r.on('config-changed', (info) => events.push(info));
-    r.setPin(id, 'deploy');
+    r.on('winsize-changed', (info) => events.push(info));
+    expect(r.setSessionWinsize('s1', 100, 30)).toBe(true);
     expect(events).toHaveLength(1);
-    expect(events[0]!.pin).toBe('deploy');
-    expect(events[0]!.quietUntil).toBeNull();
-    expect(events[0]!.sessionGateOverride).toBeNull();
-  });
-
-  it('setPin to the same value does not emit', () => {
-    const r = fixtureRegistry();
-    const id = r.list()[0]!.id;
-    r.setPin(id, 'x');
-    const events: any[] = [];
-    r.on('config-changed', (info) => events.push(info));
-    r.setPin(id, 'x');
-    expect(events).toHaveLength(0);
-  });
-
-  it('setPin null→null does not emit', () => {
-    const r = fixtureRegistry();
-    const id = r.list()[0]!.id;
-    const events: any[] = [];
-    r.on('config-changed', (info) => events.push(info));
-    r.setPin(id, null);
-    expect(events).toHaveLength(0);
-  });
-
-  it('setQuietUntil emits + no-op short-circuit', () => {
-    const r = fixtureRegistry();
-    const id = r.list()[0]!.id;
-    const events: any[] = [];
-    r.on('config-changed', (info) => events.push(info));
-    r.setQuietUntil(id, 1700000000000);
-    r.setQuietUntil(id, 1700000000000);
+    expect(events[0]!.cols).toBe(100);
+    expect(events[0]!.rows).toBe(30);
+    // No-op (same size) should not emit.
+    expect(r.setSessionWinsize('s1', 100, 30)).toBe(true);
     expect(events).toHaveLength(1);
-    expect(events[0]!.quietUntil).toBe(1700000000000);
   });
 
-  it('setSessionGateOverride emits + no-op short-circuit', () => {
-    const r = fixtureRegistry();
-    const id = r.list()[0]!.id;
-    const events: any[] = [];
-    r.on('config-changed', (info) => events.push(info));
-    r.setSessionGateOverride(id, 'always');
-    r.setSessionGateOverride(id, 'always');
-    expect(events).toHaveLength(1);
-    expect(events[0]!.sessionGateOverride).toBe('always');
-  });
-
-  it('config-changed payload does not contain stripped private fields', () => {
-    const r = fixtureRegistry();
-    const id = r.list()[0]!.id;
-    let captured: any = null;
-    r.on('config-changed', (info) => { captured = info; });
-    r.setPin(id, 'x');
-    expect(captured).not.toBeNull();
-    expect('claudeAllowRules' in captured).toBe(false);
-  });
-
-  it('setPin on unknown session returns false and does not emit', () => {
+  it('setSessionWinsize rejects invalid sizes', () => {
     const r = new SessionRegistry();
-    const events: any[] = [];
-    r.on('config-changed', (info) => events.push(info));
-    expect(r.setPin('nonexistent', 'x')).toBe(false);
-    expect(events).toHaveLength(0);
+    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    expect(r.setSessionWinsize('s1', 0, 24)).toBe(false);
+    expect(r.setSessionWinsize('s1', 80, -1)).toBe(false);
+    expect(r.setSessionWinsize('missing', 80, 24)).toBe(false);
   });
 });
 
@@ -238,19 +153,6 @@ describe('claudeSessionId tracking', () => {
     expect(r.clearClaudeSessionId('unknown')).toBe(false);
   });
 
-  it('emits config-changed when claudeSessionId changes', () => {
-    const r = new SessionRegistry();
-    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '' });
-    let calls = 0;
-    r.on('config-changed', () => { calls++; });
-    r.setClaudeSessionId('s1', 'cc-1');
-    expect(calls).toBe(1);
-    r.setClaudeSessionId('s1', 'cc-1'); // no-op
-    expect(calls).toBe(1);
-    r.clearClaudeSessionId('s1');
-    expect(calls).toBe(2);
-  });
-
   it('publicView surfaces claudeSessionId after setClaudeSessionId', () => {
     const r = new SessionRegistry();
     r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
@@ -270,21 +172,6 @@ describe('resetChildScopedState', () => {
     const rec = r.get('s1');
     expect(rec?.fileTailCursor).toBe(0);
     expect(rec?.lastSummaryId).toBeNull();
-  });
-
-  it('keeps parent-scoped state (pin, quietUntil, sessionGateOverride, claudeAllowRules)', () => {
-    const r = new SessionRegistry();
-    r.register({ id: 's1', name: 'n', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
-    r.setPin('s1', 'note');
-    r.setQuietUntil('s1', 12345);
-    r.setSessionGateOverride('s1', 'always');
-    r.setClaudeAllowRules('s1', ['Bash(git:*)']);
-    r.resetChildScopedState('s1');
-    const rec = r.get('s1');
-    expect(rec?.pin).toBe('note');
-    expect(rec?.quietUntil).toBe(12345);
-    expect(rec?.sessionGateOverride).toBe('always');
-    expect(rec?.claudeAllowRules).toEqual(['Bash(git:*)']);
   });
 
   it('does not touch sessionFilePath', () => {

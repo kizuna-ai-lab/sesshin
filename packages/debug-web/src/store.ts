@@ -61,21 +61,6 @@ export function applyRateLimits(sessionId: string, state: RateLimitsState): void
   rateLimitsBySession.value = { ...rateLimitsBySession.value, [sessionId]: state };
 }
 
-export function applyConfigChanged(sessionId: string, config: {
-  pin: string | null;
-  quietUntil: number | null;
-  sessionGateOverride: 'disabled' | 'auto' | 'always' | null;
-}): void {
-  const cur = sessions.value.find((s) => s.id === sessionId);
-  if (!cur) return;
-  upsertSession({
-    ...cur,
-    pin: config.pin,
-    quietUntil: config.quietUntil,
-    sessionGateOverride: config.sessionGateOverride,
-  });
-}
-
 export function applyChildSessionChanged(sessionId: string, claudeSessionId: string | null): void {
   const cur = sessions.value.find((s) => s.id === sessionId);
   if (!cur) return;

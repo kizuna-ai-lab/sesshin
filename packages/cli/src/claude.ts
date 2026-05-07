@@ -146,7 +146,6 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
       cols: process.stdout.columns ?? 80,
       rows: process.stdout.rows ?? 24,
       initialPermissionMode,
-      claudeAllowRules: claudeSettings.allowRules,
     }),
   });
   if (!reg.ok) throw new Error(`hub registration failed: ${reg.status}`);

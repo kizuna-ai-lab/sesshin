@@ -225,7 +225,7 @@ describe('wirePtyBannerTracker', () => {
     expect(f.mode()).toBe('default');
   });
 
-  it('config-changed event resizes the internal terminal', async () => {
+  it('winsize-changed event resizes the internal terminal', async () => {
     await f.feed(banner('auto mode'));
     expect(f.mode()).toBe('auto');
     // Trigger a resize via registry; tracker should keep working.

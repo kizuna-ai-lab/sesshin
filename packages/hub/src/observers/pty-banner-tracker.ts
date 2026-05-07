@@ -249,18 +249,18 @@ export function wirePtyBannerTracker(deps: BannerTrackerDeps): BannerTrackerInst
   for (const s of deps.registry.list()) attach(s.id);
   const onAdded   = (info: { id: string }): void => attach(info.id);
   const onRemoved = (id: string): void => detach(id);
-  const onConfig  = (info: { id: string; cols?: number; rows?: number }): void => {
+  const onResize  = (info: { id: string; cols?: number; rows?: number }): void => {
     if (info.cols && info.rows) resize(info.id, info.cols, info.rows);
   };
   deps.registry.on('session-added', onAdded);
   deps.registry.on('session-removed', onRemoved);
-  deps.registry.on('config-changed', onConfig);
+  deps.registry.on('winsize-changed', onResize);
 
   return {
     stop(): void {
       deps.registry.off('session-added', onAdded);
       deps.registry.off('session-removed', onRemoved);
-      deps.registry.off('config-changed', onConfig);
+      deps.registry.off('winsize-changed', onResize);
       for (const id of Array.from(watches.keys())) detach(id);
     },
     evaluate,

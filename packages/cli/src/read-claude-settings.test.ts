@@ -16,35 +16,30 @@ afterEach(() => {
 
 describe('readClaudeSettings', () => {
   it('returns empty defaults when no settings exist', () => {
-    expect(readClaudeSettings({ home: HOME, cwd: CWD })).toEqual({ defaultMode: null, allowRules: [] });
+    expect(readClaudeSettings({ home: HOME, cwd: CWD })).toEqual({ defaultMode: null });
   });
 
   it('reads user defaultMode from ~/.claude/settings.json', () => {
     mkdirSync(join(HOME, '.claude'), { recursive: true });
     writeFileSync(join(HOME, '.claude/settings.json'),
-      JSON.stringify({ permissions: { defaultMode: 'auto', allow: ['Bash(git log:*)'] } }));
-    expect(readClaudeSettings({ home: HOME, cwd: CWD })).toEqual({
-      defaultMode: 'auto', allowRules: ['Bash(git log:*)'],
-    });
+      JSON.stringify({ permissions: { defaultMode: 'auto' } }));
+    expect(readClaudeSettings({ home: HOME, cwd: CWD })).toEqual({ defaultMode: 'auto' });
   });
 
-  it('project settings override user defaultMode and merge allow rules', () => {
+  it('project settings override user defaultMode', () => {
     mkdirSync(join(HOME, '.claude'), { recursive: true });
     writeFileSync(join(HOME, '.claude/settings.json'),
-      JSON.stringify({ permissions: { defaultMode: 'auto', allow: ['Bash(git log:*)'] } }));
+      JSON.stringify({ permissions: { defaultMode: 'auto' } }));
     mkdirSync(join(CWD, '.claude'), { recursive: true });
     writeFileSync(join(CWD, '.claude/settings.json'),
-      JSON.stringify({ permissions: { defaultMode: 'default', allow: ['Edit(/tmp/*)'] } }));
-    expect(readClaudeSettings({ home: HOME, cwd: CWD })).toEqual({
-      defaultMode: 'default',
-      allowRules: ['Bash(git log:*)', 'Edit(/tmp/*)'],
-    });
+      JSON.stringify({ permissions: { defaultMode: 'default' } }));
+    expect(readClaudeSettings({ home: HOME, cwd: CWD })).toEqual({ defaultMode: 'default' });
   });
 
   it('tolerates malformed JSON', () => {
     mkdirSync(join(HOME, '.claude'), { recursive: true });
     writeFileSync(join(HOME, '.claude/settings.json'), '{ broken');
-    expect(readClaudeSettings({ home: HOME, cwd: CWD })).toEqual({ defaultMode: null, allowRules: [] });
+    expect(readClaudeSettings({ home: HOME, cwd: CWD })).toEqual({ defaultMode: null });
   });
 
   it('ignores invalid defaultMode values', () => {

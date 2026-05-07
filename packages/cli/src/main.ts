@@ -4,13 +4,10 @@ import { runClients } from './subcommands/clients.js';
 import { runHistory } from './subcommands/history.js';
 import { runCommandsInstall } from './subcommands/commands-install.js';
 import { runCommandsUninstall } from './subcommands/commands-uninstall.js';
-import { runGate } from './subcommands/gate.js';
-import { runPin } from './subcommands/pin.js';
-import { runQuiet } from './subcommands/quiet.js';
 import { runLog } from './subcommands/log.js';
 import { requireLiveSession } from './require-live-session.js';
 
-const SESSION_REQUIRED = new Set(['status', 'clients', 'history', 'gate', 'pin', 'quiet', 'log']);
+const SESSION_REQUIRED = new Set(['status', 'clients', 'history', 'log']);
 
 export interface MainDeps {
   argv: string[];
@@ -87,27 +84,6 @@ async function dispatch(deps: MainDeps, cmd: string | undefined, rest: string[])
       deps.stderr.write('usage: sesshin commands <install [--prune-only]|uninstall>\n');
       return 2;
     }
-    case 'gate': {
-      const sid = pickFlag(rest, '--session') ?? deps.env.SESSHIN_SESSION_ID;
-      const positional = stripFlagPair(rest, '--session').filter((a) => !a.startsWith('--'));
-      const policy = positional[0];
-      if (!sid || !policy) { deps.stderr.write('usage: sesshin gate <disabled|auto|always> [--session <id>]\n'); return 2; }
-      return runGate({ sessionId: sid, policy });
-    }
-    case 'pin': {
-      const sid = pickFlag(rest, '--session') ?? deps.env.SESSHIN_SESSION_ID;
-      if (!sid) { deps.stderr.write('usage: sesshin pin [<message>] [--session <id>]  (no message clears the pin)\n'); return 2; }
-      const positional = stripFlagPair(rest, '--session').filter((a) => !a.startsWith('--'));
-      const msg = positional.length > 0 ? positional.join(' ') : null;
-      return runPin({ sessionId: sid, message: msg });
-    }
-    case 'quiet': {
-      const sid = pickFlag(rest, '--session') ?? deps.env.SESSHIN_SESSION_ID;
-      if (!sid) { deps.stderr.write("usage: sesshin quiet [<duration>|off] [--session <id>]  (e.g. 5m, 30s, 1h)\n"); return 2; }
-      const positional = stripFlagPair(rest, '--session').filter((a) => !a.startsWith('--'));
-      const dur = positional[0] ?? null;
-      return runQuiet({ sessionId: sid, duration: dur });
-    }
     case 'log': {
       const sid = pickFlag(rest, '--session');
       const filter = pickFlag(rest, '--filter');
@@ -119,7 +95,7 @@ async function dispatch(deps: MainDeps, cmd: string | undefined, rest: string[])
       });
     }
     default:
-      deps.stderr.write(`usage: sesshin <claude|status|clients|history|commands|gate|pin|quiet|log> ...\n`);
+      deps.stderr.write(`usage: sesshin <claude|status|clients|history|commands|log> ...\n`);
       return 2;
   }
 }
@@ -130,9 +106,4 @@ export function pickFlag(args: readonly string[], name: string): string | undefi
   const v = args[i + 1];
   if (v === undefined || v === '' || v.startsWith('--')) return undefined;
   return v;
-}
-
-function stripFlagPair(args: readonly string[], name: string): string[] {
-  const i = args.indexOf(name);
-  return i === -1 ? [...args] : [...args.slice(0, i), ...args.slice(i + 2)];
 }

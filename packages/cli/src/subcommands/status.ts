@@ -6,7 +6,6 @@ interface DiagSession {
   state: string;
   permissionMode: string;
   claudeSessionId: string | null;
-  claudeAllowRules: string[];
   pendingApprovals: number;
   hasSubscribedActionsClient: boolean;
   sessionFilePath?: string;
@@ -27,7 +26,6 @@ export async function runStatus(opts: { sessionId?: string; json?: boolean }): P
     );
     process.stdout.write(`  claude session: ${s.claudeSessionId ?? '(none)'}\n`);
     if (s.sessionFilePath)          process.stdout.write(`  log:            ${s.sessionFilePath}\n`);
-    if (s.claudeAllowRules.length)  process.stdout.write(`  claude allow:   ${s.claudeAllowRules.join(', ')}\n`);
   }
   return 0;
 }

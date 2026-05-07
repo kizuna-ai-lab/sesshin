@@ -25,22 +25,28 @@ function defaultSubstate(): Substate {
 }
 
 export interface RegistryEvents {
-  'session-added':   (s: SessionInfo) => void;
-  'session-removed': (id: string) => void;
-  'state-changed':   (s: SessionInfo) => void;
-  'substate-changed':(s: SessionInfo) => void;
-  'config-changed':  (s: SessionInfo) => void;
+  'session-added':    (s: SessionInfo) => void;
+  'session-removed':  (id: string) => void;
+  'state-changed':    (s: SessionInfo) => void;
+  'substate-changed': (s: SessionInfo) => void;
+  /**
+   * Fired only when session winsize (cols/rows) or claudeSessionId
+   * actually changes. Replaces the older catch-all 'config-changed'
+   * event after the sticky-config fields (pin/quietUntil/gateOverride/
+   * claudeAllowRules) were dropped — the remaining listeners only
+   * cared about resize and child-session boundary detection.
+   */
+  'winsize-changed': (s: SessionInfo) => void;
 }
 
 export interface SessionRecord extends SessionInfo {
   sessionFilePath: string;
   fileTailCursor: number;
   lastHeartbeat: number;
-  claudeAllowRules: string[];
-  sessionGateOverride: 'disabled' | 'auto' | 'always' | null;
-  pin: string | null;
-  quietUntil: number | null;
   rateLimits: RateLimitsState | null;
+  endedAt: number | null;
+  endReason: 'normal' | 'interrupted' | 'killed' | null;
+  hidden: boolean;
 }
 
 export class SessionRegistry extends EventEmitter {
@@ -63,11 +69,10 @@ export class SessionRegistry extends EventEmitter {
       rows: input.rows,
       fileTailCursor: 0,
       lastHeartbeat: Date.now(),
-      claudeAllowRules: [],
-      sessionGateOverride: null,
-      pin: null,
-      quietUntil: null,
       rateLimits: null,
+      endedAt: null,
+      endReason: null,
+      hidden: false,
     };
     this.sessions.set(rec.id, rec);
     this.emit('session-added', this.publicView(rec));
@@ -108,13 +113,6 @@ export class SessionRegistry extends EventEmitter {
     return true;
   }
 
-  setClaudeAllowRules(id: string, rules: string[]): boolean {
-    const s = this.sessions.get(id);
-    if (!s) return false;
-    s.claudeAllowRules = [...rules];
-    return true;
-  }
-
   setLastSummary(id: string, summaryId: string): void {
     const s = this.sessions.get(id);
     if (s) s.lastSummaryId = summaryId;
@@ -145,7 +143,6 @@ export class SessionRegistry extends EventEmitter {
     if (!s) return false;
     if (s.claudeSessionId === claudeId) return false;
     s.claudeSessionId = claudeId;
-    this.emit('config-changed', this.publicView(s));
     return true;
   }
 
@@ -154,17 +151,15 @@ export class SessionRegistry extends EventEmitter {
     if (!s) return false;
     if (s.claudeSessionId === null) return false;
     s.claudeSessionId = null;
-    this.emit('config-changed', this.publicView(s));
     return true;
   }
 
   /**
    * Reset state scoped to a single Claude conversation. Called on
    * child-session boundary (new claude session_id observed). Parent-scoped
-   * state — pin, quietUntil, sessionGateOverride, claudeAllowRules,
-   * client subscriptions — is untouched. sessionFilePath is left alone too
-   * because setSessionFilePath resets it (and the tail cursor) when
-   * SessionStart delivers the new transcript_path.
+   * state — client subscriptions, sessionFilePath — is untouched.
+   * sessionFilePath is left alone because setSessionFilePath resets it (and
+   * the tail cursor) when SessionStart delivers the new transcript_path.
    */
   resetChildScopedState(id: string): void {
     const s = this.sessions.get(id);
@@ -189,47 +184,8 @@ export class SessionRegistry extends EventEmitter {
     if (s.cols === cols && s.rows === rows) return true;
     s.cols = cols;
     s.rows = rows;
-    this.emit('config-changed', this.publicView(s));
+    this.emit('winsize-changed', this.publicView(s));
     return true;
-  }
-
-  setSessionGateOverride(id: string, p: 'disabled' | 'auto' | 'always'): boolean {
-    const s = this.sessions.get(id);
-    if (!s) return false;
-    if (s.sessionGateOverride === p) return true;
-    s.sessionGateOverride = p;
-    this.emit('config-changed', this.publicView(s));
-    return true;
-  }
-
-  getSessionGateOverride(id: string): 'disabled' | 'auto' | 'always' | null {
-    return this.sessions.get(id)?.sessionGateOverride ?? null;
-  }
-
-  setPin(id: string, msg: string | null): boolean {
-    const s = this.sessions.get(id);
-    if (!s) return false;
-    if (s.pin === msg) return true;
-    s.pin = msg;
-    this.emit('config-changed', this.publicView(s));
-    return true;
-  }
-
-  getPin(id: string): string | null {
-    return this.sessions.get(id)?.pin ?? null;
-  }
-
-  setQuietUntil(id: string, ts: number | null): boolean {
-    const s = this.sessions.get(id);
-    if (!s) return false;
-    if (s.quietUntil === ts) return true;
-    s.quietUntil = ts;
-    this.emit('config-changed', this.publicView(s));
-    return true;
-  }
-
-  getQuietUntil(id: string): number | null {
-    return this.sessions.get(id)?.quietUntil ?? null;
   }
 
   setRateLimits(id: string, state: RateLimitsState): boolean {
@@ -247,11 +203,10 @@ export class SessionRegistry extends EventEmitter {
     const {
       // Stripped fields (private to the hub):
       fileTailCursor: _c, lastHeartbeat: _h,
-      claudeAllowRules: _a,
       // rateLimits is broadcast on its own `session.rate-limits` channel
       // (and replayed by the WS subscribe handler); keep it out of generic
       // session events to avoid duplicating it through every state-changed
-      // / config-changed / session.list broadcast.
+      // / session.list broadcast.
       rateLimits: _rl,
       // Surfaced fields stay in `pub`:
       sessionFilePath,

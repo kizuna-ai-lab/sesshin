@@ -2,7 +2,7 @@ import {
   connected, sessions, upsertSession, removeSession,
   addSummary, addEvent, lastEventId,
   addPromptRequest, removePromptRequest,
-  applyConfigChanged, applyChildSessionChanged,
+  applyChildSessionChanged,
   applyRateLimits,
 } from './store.js';
 import type { Action, PromptResponseAnswer } from '@sesshin/shared';
@@ -105,12 +105,6 @@ export function handleFrame(m: any): void {
       }); return;
     case 'session.prompt-request.resolved':
       removePromptRequest(m.sessionId, m.requestId); return;
-    case 'session.config-changed':
-      applyConfigChanged(m.sessionId, {
-        pin: m.pin,
-        quietUntil: m.quietUntil,
-        sessionGateOverride: m.sessionGateOverride,
-      }); return;
     case 'session.child-changed':
       applyChildSessionChanged(m.sessionId, m.claudeSessionId);
       return;

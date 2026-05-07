@@ -87,7 +87,6 @@ const RegisterBody = z.object({
   cols:                  z.number().int().positive().optional(),
   rows:                  z.number().int().positive().optional(),
   initialPermissionMode: PermissionModeEnum.optional(),
-  claudeAllowRules:      z.array(z.string()).optional(),
 });
 const WinsizeBody = z.object({ cols: z.number().int().positive(), rows: z.number().int().positive() });
 const PausedReportBody = z.object({ paused: z.boolean() });
@@ -316,42 +315,6 @@ async function route(req: IncomingMessage, res: ServerResponse, deps: RestServer
     const list = deps.historyForSession?.(id, n) ?? [];
     return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(list));
   }
-  const gm = url.pathname.match(/^\/api\/sessions\/([^/]+)\/gate$/);
-  if (gm) {
-    const id = gm[1]!;
-    if (method !== 'POST') return void res.writeHead(405).end();
-    let body: unknown;
-    try { body = await readJson(req); } catch { return void res.writeHead(400).end(); }
-    const obj = (body && typeof body === 'object' ? body as Record<string, unknown> : {});
-    const p = obj['policy'];
-    if (typeof p !== 'string' || !['disabled', 'auto', 'always'].includes(p)) return void res.writeHead(400).end();
-    return void res.writeHead(deps.registry.setSessionGateOverride(id, p as 'disabled' | 'auto' | 'always') ? 204 : 404).end();
-  }
-  const pm = url.pathname.match(/^\/api\/sessions\/([^/]+)\/pin$/);
-  if (pm) {
-    const id = pm[1]!;
-    if (method !== 'POST') return void res.writeHead(405).end();
-    let body: unknown;
-    try { body = await readJson(req); } catch { return void res.writeHead(400).end(); }
-    const obj = (body && typeof body === 'object' ? body as Record<string, unknown> : {});
-    const msg = obj['message'];
-    const msgStr = typeof msg === 'string' && msg.length > 0 ? msg : null;
-    return void res.writeHead(deps.registry.setPin(id, msgStr) ? 204 : 404).end();
-  }
-  const qm = url.pathname.match(/^\/api\/sessions\/([^/]+)\/quiet$/);
-  if (qm) {
-    const id = qm[1]!;
-    if (method !== 'POST') return void res.writeHead(405).end();
-    let body: unknown;
-    try { body = await readJson(req); } catch { return void res.writeHead(400).end(); }
-    const obj = (body && typeof body === 'object' ? body as Record<string, unknown> : {});
-    const ttlRaw = obj['ttlMs'];
-    const ttl = Number(ttlRaw ?? 0);
-    if (!Number.isFinite(ttl) || ttl < 0) return void res.writeHead(400).end();
-    const until = ttl > 0 ? Date.now() + ttl : null;
-    return void res.writeHead(deps.registry.setQuietUntil(id, until) ? 204 : 404).end();
-  }
-
   const permRoute = url.pathname.match(/^\/permission\/([^/]+)$/);
   if (permRoute) {
     const sid = permRoute[1]!;
@@ -444,9 +407,6 @@ async function registerSession(req: IncomingMessage, res: ServerResponse, deps: 
   const rec = deps.registry.register(parsed.data);
   if (parsed.data.initialPermissionMode) {
     deps.registry.setPermissionMode(rec.id, parsed.data.initialPermissionMode);
-  }
-  if (parsed.data.claudeAllowRules) {
-    deps.registry.setClaudeAllowRules(rec.id, parsed.data.claudeAllowRules);
   }
   res.writeHead(201, { 'content-type': 'application/json' })
      .end(JSON.stringify({ id: rec.id, registeredAt: rec.startedAt }));
