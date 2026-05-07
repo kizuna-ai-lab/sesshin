@@ -10,3 +10,24 @@ export function mergeUserHooksWithOurs(ours: HooksMap, userSettings: any): Hooks
   }
   return { hooks: out };
 }
+
+export interface MergeSettingsParams {
+  /** The base settings object (e.g. from generateHooksOnlySettings, already parsed). */
+  base: Record<string, any>;
+  /** Absolute path to the sesshin-statusline-relay binary. */
+  relayBinPath: string;
+  /** Environment variable map — typically process.env. */
+  env: Record<string, string | undefined>;
+}
+
+/**
+ * Merges base settings with sesshin additions (statusLine injection).
+ * Opt-out: set SESSHIN_DISABLE_STATUSLINE_RELAY=1 in env to skip injection.
+ */
+export function mergeSettings(params: MergeSettingsParams): Record<string, any> {
+  const merged: Record<string, any> = { ...params.base };
+  if (params.env['SESSHIN_DISABLE_STATUSLINE_RELAY'] !== '1') {
+    merged['statusLine'] = { type: 'command', command: params.relayBinPath };
+  }
+  return merged;
+}
