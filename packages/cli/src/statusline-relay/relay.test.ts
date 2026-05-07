@@ -122,4 +122,16 @@ describe('runRelay', () => {
     expect((deps as any)._captured.stderr.join('')).toMatch(/timed out/);
     expect(code).toBe(0);
   });
+
+  it('spawn rejects: falls back to default render, logs to stderr, exits 0', async () => {
+    const deps = makeDeps({
+      stdin: JSON.stringify({ rate_limits: { five_hour: { used_percentage: 12, resets_at: 1 }, seven_day: null } }),
+      env: { SESSHIN_HUB_URL: 'http://x', SESSHIN_SESSION_ID: 's1', SESSHIN_USER_STATUSLINE_CMD: 'broken' },
+      spawn: (() => Promise.reject(new Error('ENOENT: no such file'))) as any,
+    });
+    const code = await runRelay(deps);
+    expect(code).toBe(0);
+    expect((deps as any)._captured.stdout.join('')).toBe('5h: 12% · 7d: -');
+    expect((deps as any)._captured.stderr.join('')).toMatch(/wrapped command failed to start.*ENOENT/);
+  });
 });

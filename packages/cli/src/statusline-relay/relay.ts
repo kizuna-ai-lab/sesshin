@@ -54,7 +54,19 @@ export async function runRelay(deps: RelayDeps): Promise<number> {
   // 4. Wrap user's statusline if configured
   const userCmd = deps.env.SESSHIN_USER_STATUSLINE_CMD;
   if (userCmd && userCmd.trim().length > 0) {
-    const r = await deps.spawn('sh', ['-c', userCmd], { stdin: deps.stdin, timeoutMs: deps.wrapTimeoutMs });
+    let r: Awaited<ReturnType<RelayDeps['spawn']>>;
+    try {
+      r = await deps.spawn('sh', ['-c', userCmd], { stdin: deps.stdin, timeoutMs: deps.wrapTimeoutMs });
+    } catch (err) {
+      // Defensive: deps.spawn is contract-bound to resolve (the realSpawn
+      // wrapper in index.ts catches child 'error' events), but a stub or a
+      // future bug could reject. Fall back to the default render rather than
+      // letting the relay process crash and break CC's TUI.
+      const msg = err instanceof Error ? err.message : String(err);
+      deps.stderr.write(`sesshin-statusline-relay: wrapped command failed to start (${msg})\n`);
+      deps.stdout.write(defaultRender(payload));
+      return 0;
+    }
     if (r.timedOut) {
       deps.stderr.write(`sesshin-statusline-relay: wrapped command timed out after ${deps.wrapTimeoutMs}ms\n`);
       deps.stdout.write(defaultRender(payload));
