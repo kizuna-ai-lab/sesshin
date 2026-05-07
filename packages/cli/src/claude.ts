@@ -41,6 +41,13 @@ function shellQuote(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
+/** Shells whose `set` builtin understands `-m` (monitor mode / job control).
+ * Excludes fish (`set` is a variable-only builtin with different flag space)
+ * and csh/tcsh (separate syntax: `set notify`/`set monitor` style). Those
+ * shells either enable job control automatically in `-i` (fish) or are rare
+ * enough that we'd rather skip than error to stderr. */
+const POSIX_SET_M_SHELLS = new Set(['bash', 'zsh', 'sh', 'dash', 'ksh', 'mksh', 'busybox']);
+
 export async function runClaude(extraArgs: string[]): Promise<void> {
   reapOrphanSettingsFiles();
 
@@ -108,12 +115,12 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
   });
 
   // Tee PTY output to local stdout AND to hub (pty-tap).
-  // process.stdout.write surfaces async EPIPE on its 'error' event when the
-  // parent pipe closes (e2e harness exiting, terminal closed). Listen to it
-  // so the unhandled error doesn't crash node-pty's event emitter on the
-  // next pty.onData fire.
+  // process.stdout.write surfaces EPIPE asynchronously via the 'error' event
+  // when the parent pipe closes (e2e harness exiting, terminal closed). The
+  // listener is what actually catches it; a sync try/catch around .write
+  // can't see async I/O errors anyway.
   process.stdout.on('error', () => { /* parent gone — drop subsequent writes */ });
-  wrap.onData((d) => { try { process.stdout.write(d); } catch { /* EPIPE on sync write */ } });
+  wrap.onData((d) => process.stdout.write(d));
   const tap = startPtyTap({ hubUrl: HUB_URL, sessionId });
   wrap.onData((d) => tap.writeChunk(d));
 
@@ -133,9 +140,15 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
   installSignalForwarder('SIGQUIT', '\x1c'); // Ctrl+\ → quit inner job (rare)
 
   // ── Local tty raw passthrough ────────────────────────────────────────────
+  // setEncoding('utf-8') routes stdin chunks through Node's StringDecoder,
+  // which buffers partial multi-byte UTF-8 sequences across chunk boundaries.
+  // Without it, a single Buffer.toString('utf-8') on a chunk that ends mid-
+  // codepoint (paste of CJK / emoji / accented chars) would produce a
+  // replacement character (U+FFFD) and corrupt the user's input.
   if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  process.stdin.setEncoding('utf-8');
   process.stdin.resume();
-  process.stdin.on('data', (d) => wrap.write(typeof d === 'string' ? d : d.toString('utf-8')));
+  process.stdin.on('data', (d: string) => wrap.write(d));
 
   // ── Web → PTY input injection ────────────────────────────────────────────
   const inject = startInjectListener({
@@ -179,16 +192,18 @@ export async function runClaude(extraArgs: string[]): Promise<void> {
   // acceptable v1 cost. `set -m` explicitly enables monitor mode (job
   // control) — bash and zsh enable it automatically in interactive mode,
   // but dash/sh do NOT, which would mean Ctrl+Z gets sent to the shell's
-  // pgrp instead of being routed to a separate foreground job. Append
-  // `; exit` so that when claude finishes (normal exit or user types
-  // `fg` after Ctrl+Z and claude eventually returns), the inner shell
-  // exits too — closing the PTY, firing wrap.onExit, tearing down sesshin.
+  // pgrp instead of being routed to a separate foreground job. fish and
+  // csh/tcsh use different syntax (fish enables job control automatically
+  // in -i, csh has its own builtins) and would error on `set -m`, so we
+  // whitelist only the POSIX-sh-compatible shells. Append `; exit` so the
+  // inner shell auto-terminates when claude finishes — closing the PTY,
+  // firing wrap.onExit, and tearing sesshin down.
   //
-  // POSIX-ish `;` separator works for bash/zsh/fish/dash/sh/ksh.
   // The `printf '\x1b[2J\x1b[H'` clears the screen + homes the cursor right
   // before claude runs, hiding the brief PS1 + echoed-command flash that
   // would otherwise be visible while the inner shell processes our line.
-  wrap.write(`set -m; printf '\\x1b[2J\\x1b[H'; ${claudeCmd}; exit\n`);
+  const setMonitor = POSIX_SET_M_SHELLS.has(shell.name) ? 'set -m; ' : '';
+  wrap.write(`${setMonitor}printf '\\x1b[2J\\x1b[H'; ${claudeCmd}; exit\n`);
 
   // ── Shutdown ─────────────────────────────────────────────────────────────
   // Triggered by:

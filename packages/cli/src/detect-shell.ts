@@ -1,4 +1,4 @@
-import { readlinkSync, readFileSync } from 'node:fs';
+import { readlinkSync } from 'node:fs';
 
 export interface DetectedShell {
   /** Absolute path to the shell binary to spawn. */
