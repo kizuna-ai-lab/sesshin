@@ -11,7 +11,6 @@ export const config = {
   publicHost:   '127.0.0.1',
   /** Persistent state location. */
   cacheDir:     join(homedir(), '.cache', 'sesshin'),
-  sessionsCheckpointFile: join(homedir(), '.cache', 'sesshin', 'sessions.json'),
   hubLogFile:   join(homedir(), '.cache', 'sesshin', 'hub.log'),
   /** Grace period after last session unregisters. */
   autoShutdownMs: 30_000,

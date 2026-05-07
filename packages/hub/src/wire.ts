@@ -4,8 +4,9 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { log } from './logger.js';
-import { SessionRegistry } from './registry/session-registry.js';
-import { Checkpoint } from './registry/checkpoint.js';
+import { SessionRegistry, type SessionRecord } from './registry/session-registry.js';
+import { openDb } from './storage/db.js';
+import { Persistor } from './storage/persistor.js';
 import { EventBus } from './event-bus.js';
 import { wireHookIngest } from './observers/hook-ingest.js';
 import type { HookEnvelope } from './agents/claude/normalize-hook.js';
@@ -19,7 +20,7 @@ import { HeadlessTerm } from './observers/headless-term.js';
 import { tailSessionFile } from './observers/session-file-tail.js';
 import { createRestServer, type RestServer, type RestServerDeps } from './rest/server.js';
 import { createWsServer, type WsServerInstance, type WsServerDeps } from './ws/server.js';
-import { reapStaleSessions, shouldRestoreSession } from './wire-liveness.js';
+import { reapStaleSessions } from './wire-liveness.js';
 import { InputBridge } from './input-bridge.js';
 import { Summarizer } from './summarizer/index.js';
 import { runModeBPrime } from './summarizer/mode-b-prime.js';
@@ -466,28 +467,39 @@ export async function startHub(): Promise<HubInstance> {
   const registry = new SessionRegistry();
   const bus      = new EventBus();
   const tap      = new PtyTap({ ringBytes: config.rawRingBytes });
-  const checkpoint = new Checkpoint(registry, { path: config.sessionsCheckpointFile, debounceMs: 100 });
+  const dbPath = process.env['SESSHIN_STATE_DB'] ?? join(homedir(), '.sesshin', 'state.db');
+  const db = openDb(dbPath);
+  const persistor = new Persistor({ db, registry, debounceMs: 200 });
+  persistor.start();
   const dedup    = new Dedup({ windowMs: 2000 });
   const bridge   = new InputBridge();
 
-  // Restore from checkpoint (best-effort).
-  for (const r of checkpoint.load().sessions) {
-    const liveness = shouldRestoreSession(r, SESSION_HEARTBEAT_TIMEOUT_MS);
-    if (!liveness.shouldKeep) {
-      log.info({ id: r.id, pid: r.pid, reason: liveness.reason }, 'skipping stale session on restore');
-      continue;
-    }
+  // Restore live sessions from SQLite (best-effort). Persistor is started above
+  // so the register() calls below are also captured by its listeners (idempotent
+  // upserts back to the DB row we just read).
+  const liveRows = db.sessions.list({ includeEnded: false, includeHidden: true, limit: 500 });
+  for (const r of liveRows) {
     try {
+      const meta = r.metadata as {
+        substate?: import('@sesshin/shared').Substate;
+        lastSummaryId?: string | null;
+        fileTailCursor?: number;
+        cols?: number | null;
+        rows?: number | null;
+      };
       const restored = registry.register({
-        id: r.id, name: r.name, agent: r.agent, cwd: r.cwd, pid: r.pid,
-        sessionFilePath: r.sessionFilePath,
+        id: r.id, name: r.name, agent: r.agent as SessionRecord['agent'],
+        cwd: r.cwd, pid: r.pid ?? 0,
+        sessionFilePath: r.sessionFilePath ?? '',
+        ...(meta.cols ? { cols: meta.cols } : {}),
+        ...(meta.rows ? { rows: meta.rows } : {}),
       });
       restored.startedAt = r.startedAt;
-      restored.state = r.state;
-      restored.substate = structuredClone(r.substate);
-      restored.lastSummaryId = r.lastSummaryId;
-      restored.fileTailCursor = r.fileTailCursor;
-      restored.lastHeartbeat = r.lastHeartbeat;
+      restored.state = r.lastState as SessionRecord['state'];
+      if (meta.substate) restored.substate = structuredClone(meta.substate);
+      restored.lastSummaryId = meta.lastSummaryId ?? null;
+      restored.fileTailCursor = meta.fileTailCursor ?? 0;
+      restored.lastHeartbeat = Date.now();   // grace period
       restored.claudeSessionId = r.claudeSessionId;
     } catch (e) {
       log.warn({ err: e, id: r.id }, 'failed to restore session');
@@ -501,8 +513,6 @@ export async function startHub(): Promise<HubInstance> {
     }
   }, SESSION_REAP_INTERVAL_MS);
   staleSweep.unref();
-
-  checkpoint.start();
 
   // Reap once after startup restore so stale sessions don't survive until the first interval.
   for (const item of reapStaleSessions(registry, SESSION_HEARTBEAT_TIMEOUT_MS)) {
@@ -733,9 +743,10 @@ export async function startHub(): Promise<HubInstance> {
       for (const t of terminals.values()) t.dispose();
       terminals.clear();
       for (const s of stopTails.values()) s();
-      checkpoint.stop();
+      persistor.stop();
       await ws.close();
       await rest.close();
+      db.close();
     },
   };
 }
