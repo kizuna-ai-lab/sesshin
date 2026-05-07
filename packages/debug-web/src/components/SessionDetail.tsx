@@ -2,6 +2,7 @@ import { useState } from 'preact/hooks';
 import { selectedSession, summariesBySession, eventsBySession } from '../store.js';
 import { StateBadge } from './StateBadge.js';
 import { ModeBadge } from './ModeBadge.js';
+import { CycleModeButton } from './CycleModeButton.js';
 import { SummaryCard } from './SummaryCard.js';
 import { EventTimeline } from './EventTimeline.js';
 import { ActionButtons } from './ActionButtons.js';
@@ -42,6 +43,7 @@ export function SessionDetail({ ws }: { ws: WsClient }) {
         <h2 style={{ margin: 0 }}>{s.name}</h2>
         <StateBadge state={s.state} />
         <ModeBadge mode={s.substate.permissionMode} />
+        <CycleModeButton ws={ws} sessionId={s.id} disabled={s.substate.paused ?? false} />
         <RateLimitsPill sessionId={s.id} />
       </div>
       <div data-testid="session-id-row"
