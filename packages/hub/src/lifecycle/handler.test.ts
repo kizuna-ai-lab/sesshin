@@ -74,6 +74,18 @@ describe('LifecycleHandler', () => {
     expect(env.db.sessions.get('s')!.hidden).toBe(true);
   });
 
+  it('delete emits state-changed so subscribers see hidden flip', () => {
+    env.reg.register({ id: 's', name: 'd', agent: 'claude-code', cwd: '/', pid: 1, sessionFilePath: '/x' });
+    env.reg.updateState('s', 'done');
+    let observedHidden: boolean | undefined;
+    env.reg.on('state-changed', (info) => {
+      if (info.id === 's') observedHidden = info.hidden;
+    });
+    const r = env.handler.handle({ type: 'session.lifecycle', requestId: 'r', sessionId: 's', action: 'delete' }, 'c');
+    expect(r.ok).toBe(true);
+    expect(observedHidden).toBe(true);
+  });
+
   it('kill SIGTERMs, then unregisters with endReason killed', async () => {
     env.reg.register({ id: 's', name: 'd', agent: 'claude-code', cwd: '/', pid: 9999, sessionFilePath: '/x' });
     env.reg.updateState('s', 'running');

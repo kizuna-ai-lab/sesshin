@@ -124,6 +124,10 @@ export class LifecycleHandler {
     }
     this.deps.db.sessions.setHidden(rec.id, true);
     rec.hidden = true;
+    // Trigger a public-view emit so clients observe the delete (hidden flip).
+    // Same pattern as doRename: re-emit 'state-changed' with the updated public view.
+    const view = this.deps.registry.list().find((s) => s.id === rec.id);
+    if (view) this.deps.registry.emit('state-changed', view);
     return this.audit(msg, by, { ok: true });
   }
 
