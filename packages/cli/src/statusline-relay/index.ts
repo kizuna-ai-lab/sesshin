@@ -16,6 +16,10 @@ const realSpawn: RelayDeps['spawn'] = (cmd, args, opts) => new Promise((resolve)
   child.stderr.on('data', (d) => { stderr += d.toString('utf-8'); });
   child.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout, stderr, timedOut }); });
   child.on('error', () => { clearTimeout(timer); resolve({ code: 1, stdout, stderr, timedOut }); });
+  // If spawn fails (e.g. ENOENT), the synchronous writes below would otherwise
+  // emit an unhandled 'error' on stdin and crash the process. Swallow it here;
+  // the child.on('error') handler already resolves the promise cleanly.
+  child.stdin.on('error', () => { /* see comment above */ });
   child.stdin.write(opts.stdin);
   child.stdin.end();
 });
