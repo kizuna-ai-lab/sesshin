@@ -31,7 +31,7 @@ This spec coordinates the four issues into a single PR. Sesshin is a single-mach
 4. REST catalog endpoints `GET /api/v1/sessions` and `GET /api/v1/sessions/:id`, with paginated message replay.
 5. Lifecycle handler with five actions, audit-recorded via the `actions` table.
 6. `proc-state` reconciliation for accurate `paused` state across hub restarts and external signals.
-7. New capabilities `messages`, `catalog`, `lifecycle`. New WS messages `session.message`, `session.ended`, `session.lifecycle`, `history.request`, `error`. Removed: `voice`, `history` capabilities; `session.config-changed` message; sticky-config REST endpoints; `sesshin-pin` / `sesshin-quiet` / `sesshin-gate` slash commands.
+7. New capabilities `messages`, `catalog`, `lifecycle`. New WS messages `session.message`, `session.ended`, `session.lifecycle`, `history.request`. `server.error` extended with optional `sessionId` / `requestId`. Removed: `voice`, `history` capabilities; `session.config-changed` message; sticky-config REST endpoints; `sesshin-pin` / `sesshin-quiet` / `sesshin-gate` slash commands.
 8. REST path version bump: all hub REST endpoints move under `/api/v1/`. Old `/api/...` paths return `410 Gone`.
 9. Closes issue #6 (sticky-config persistence design — superseded).
 
@@ -100,10 +100,12 @@ CREATE INDEX idx_actions_session_created ON actions(session_id, created_at);
 {
   "substate":         { /* StateMachineSubstate */ },
   "lastSummaryId":    "...",
-  "fileTailCursor":   { "offset": 123, "inode": 456 },
-  "permissionMode":   "default" | "acceptEdits" | "bypassPermissions" | "plan"
+  "fileTailCursor":   123,
+  "permissionMode":   "..."   // (already part of substate via SubstateSchema; listed for clarity)
 }
 ```
+
+`permissionMode` is already a field on `SubstateSchema`, so it serializes as part of `substate`. Listed above only to make explicit that the metadata blob is the canonical home for it post-PR (not a separate column).
 
 `lastHeartbeat` is **not** persisted. On hub restart it initializes to `Date.now()` (the standard grace period), and the wrapped CLIs that are still running will heartbeat fresh.
 
@@ -198,13 +200,13 @@ New upstream message `history.request`:
 }
 ```
 
-New downstream message `error` (universal envelope):
+Existing downstream `server.error` is extended with optional `sessionId` and `requestId` fields (rather than introducing a parallel `error` type):
 
 ```ts
 {
-  type: 'error';
+  type: 'server.error';
   code: string;                 // e.g. 'lifecycle.invalid-state' | 'history.out-of-range' | 'capability.required'
-  message: string;
+  message?: string;
   sessionId?: string;
   requestId?: string;           // echo of the offending upstream requestId
 }
@@ -222,8 +224,10 @@ New downstream message `error` (universal envelope):
   name: string;
   agent: string;
   cwd: string;
-  state: 'starting' | 'idle' | 'busy' | 'awaiting-input' | 'paused'
-       | 'done' | 'interrupted' | 'killed';
+  state: 'starting' | 'idle' | 'running' | 'awaiting-input' | 'awaiting-confirmation'
+       | 'error' | 'paused' | 'done' | 'interrupted' | 'killed';
+  // existing values kept verbatim from packages/shared/src/session.ts;
+  // this PR only ADDS 'paused' and 'killed'.
   startedAt: number;
   endedAt: number | null;
   endReason: 'normal' | 'interrupted' | 'killed' | null;
@@ -279,7 +283,7 @@ REST auth is unchanged from today's loopback model. (The bearer-token / identity
 
 | Action | Pre-condition | Effect | Audit kind |
 |--------|---------------|--------|------------|
-| `pause` | `state ∈ {idle, busy, awaiting-input}` | `process.kill(pid, 'SIGSTOP')`; verify proc-state = stopped | `pause` |
+| `pause` | `state ∈ {idle, running, awaiting-input, awaiting-confirmation}` | `process.kill(pid, 'SIGSTOP')`; verify proc-state = stopped | `pause` |
 | `resume` | `state = paused` | `process.kill(pid, 'SIGCONT')`; verify proc-state = running | `resume` |
 | `kill` | `state ∉ {done, interrupted, killed}` | `SIGTERM`; if alive after 3 s, `SIGKILL`; unregister with `endReason = 'killed'` | `kill` |
 | `rename` | always valid; `payload.name` required | `SessionRecord.name = payload.name`; persistor flushes; broadcast `SessionInfo` update | `rename` |
