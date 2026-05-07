@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readClaudeSettings } from './read-claude-settings.js';
+import { readClaudeSettings, resolveInheritedStatusLine } from './read-claude-settings.js';
 
 let HOME: string, CWD: string;
 beforeEach(() => {
@@ -52,5 +52,54 @@ describe('readClaudeSettings', () => {
     writeFileSync(join(HOME, '.claude/settings.json'),
       JSON.stringify({ permissions: { defaultMode: 'wat' } }));
     expect(readClaudeSettings({ home: HOME, cwd: CWD }).defaultMode).toBeNull();
+  });
+});
+
+describe('resolveInheritedStatusLine', () => {
+  it('returns null when no settings file has a statusLine', () => {
+    expect(resolveInheritedStatusLine({ home: HOME, cwd: CWD })).toBeNull();
+  });
+
+  it('returns user-level statusLine when only ~/.claude/settings.json has one', () => {
+    mkdirSync(join(HOME, '.claude'), { recursive: true });
+    writeFileSync(join(HOME, '.claude/settings.json'), JSON.stringify({
+      statusLine: { type: 'command', command: 'my-statusline' },
+    }));
+    expect(resolveInheritedStatusLine({ home: HOME, cwd: CWD }))
+      .toEqual({ command: 'my-statusline' });
+  });
+
+  it('project-level statusLine wins over user-level', () => {
+    mkdirSync(join(HOME, '.claude'), { recursive: true });
+    mkdirSync(join(CWD, '.claude'), { recursive: true });
+    writeFileSync(join(HOME, '.claude/settings.json'), JSON.stringify({
+      statusLine: { type: 'command', command: 'user-cmd' },
+    }));
+    writeFileSync(join(CWD, '.claude/settings.json'), JSON.stringify({
+      statusLine: { type: 'command', command: 'project-cmd', padding: 1 },
+    }));
+    expect(resolveInheritedStatusLine({ home: HOME, cwd: CWD }))
+      .toEqual({ command: 'project-cmd', padding: 1 });
+  });
+
+  it('skips the excluded settings path even if it has a statusLine', () => {
+    mkdirSync(join(HOME, '.claude'), { recursive: true });
+    const tmpInjected = join(CWD, 'sesshin-injected.json');
+    writeFileSync(tmpInjected, JSON.stringify({
+      statusLine: { type: 'command', command: 'sesshin-relay' },
+    }));
+    writeFileSync(join(HOME, '.claude/settings.json'), JSON.stringify({
+      statusLine: { type: 'command', command: 'user-cmd' },
+    }));
+    expect(resolveInheritedStatusLine({ home: HOME, cwd: CWD, excludePath: tmpInjected }))
+      .toEqual({ command: 'user-cmd' });
+  });
+
+  it('ignores statusLine entries whose type is not "command"', () => {
+    mkdirSync(join(HOME, '.claude'), { recursive: true });
+    writeFileSync(join(HOME, '.claude/settings.json'), JSON.stringify({
+      statusLine: { type: 'static', value: 'hi' } as unknown,
+    }));
+    expect(resolveInheritedStatusLine({ home: HOME, cwd: CWD })).toBeNull();
   });
 });
