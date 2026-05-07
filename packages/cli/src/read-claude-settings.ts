@@ -45,11 +45,14 @@ export interface InheritedStatusLine {
 
 export function resolveInheritedStatusLine(opts: ResolveStatusLineOpts): InheritedStatusLine | null {
   const candidates: string[] = [
-    '/etc/claude/settings.json',                                  // enterprise
     join(opts.cwd,  '.claude/settings.local.json'),               // project (local)
     join(opts.cwd,  '.claude/settings.json'),                     // project
     join(opts.home, '.claude/settings.json'),                     // user
   ];
+  // User-level statusLine inheritance only (project + user); enterprise managed-settings
+  // resolution is intentionally out of scope for v1 and would require platform-specific
+  // paths (macOS: /Library/Application Support/ClaudeCode/managed-settings.json, Linux:
+  // /etc/claude-code/managed-settings.json).
   // Highest precedence first per CC's resolution order.
   for (const path of candidates) {
     if (opts.excludePath && path === opts.excludePath) continue;
