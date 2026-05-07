@@ -248,6 +248,11 @@ export class SessionRegistry extends EventEmitter {
       // Stripped fields (private to the hub):
       fileTailCursor: _c, lastHeartbeat: _h,
       claudeAllowRules: _a,
+      // rateLimits is broadcast on its own `session.rate-limits` channel
+      // (and replayed by the WS subscribe handler); keep it out of generic
+      // session events to avoid duplicating it through every state-changed
+      // / config-changed / session.list broadcast.
+      rateLimits: _rl,
       // Surfaced fields stay in `pub`:
       sessionFilePath,
       ...pub

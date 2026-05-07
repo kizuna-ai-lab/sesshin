@@ -112,6 +112,7 @@ describe('SessionRegistry — publicView surfaces sessionFilePath', () => {
     expect('claudeAllowRules' in view).toBe(false);
     expect('lastHeartbeat' in view).toBe(false);
     expect('fileTailCursor' in view).toBe(false);
+    expect('rateLimits' in view).toBe(false);
     // pin, quietUntil, sessionGateOverride are now surfaced in publicView:
     expect('pin' in view).toBe(true);
     expect('quietUntil' in view).toBe(true);
