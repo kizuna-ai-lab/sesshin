@@ -30,6 +30,7 @@ import { wireSummarizerTrigger } from './summarizer-trigger.js';
 import { ApprovalManager } from './approval-manager.js';
 import type { ApprovalOutcome } from './approval-manager.js';
 import { LifecycleHandler } from './lifecycle/handler.js';
+import { Synthesizer } from './synthesizer/messages.js';
 import { getHandler, setCatchAllToolName } from './agents/claude/tool-handlers/registry.js';
 import type { ToolHandler, HandlerCtx } from './agents/claude/tool-handlers/types.js';
 import type { PermissionUpdate } from '@sesshin/shared';
@@ -573,6 +574,16 @@ export async function startHub(): Promise<HubInstance> {
   wireStateMachine({ bus: dedupedBus, registry });
   wireJsonlModeTracker({ bus, registry });   // NB: use raw bus, not dedupedBus — agent-internal passes dedup but we don't care
 
+  // T16: Synthesizer folds user-prompt / Stop / PreCompact / PostCompact into
+  // chat-style MessageRows. The broadcast callback is a no-op for now; T18
+  // wires it to wsServer.broadcastSessionMessage(...).
+  const synth = new Synthesizer({
+    db,
+    bus: dedupedBus,
+    broadcast: () => { /* T18 wires the WS broadcast */ },
+  });
+  synth.start();
+
   // ESC-aborted-turn fallback: claude doesn't fire any hook on Esc (its
   // abort path returns directly without invoking handleStopHooks). Watch
   // PTY byte rate — when spinner stops the rate drops and we recover
@@ -787,6 +798,7 @@ export async function startHub(): Promise<HubInstance> {
       for (const t of terminals.values()) t.dispose();
       terminals.clear();
       for (const s of stopTails.values()) s();
+      synth.stop();
       persistor.stop();
       await ws.close();
       await rest.close();
